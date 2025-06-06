@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 from fastapi.responses import FileResponse
 from pathlib import Path
 
-from api import document,indexing,chat
+from api import document,indexing,chat,chat_session
 
 load_dotenv()
 
@@ -21,6 +21,7 @@ def serve_ui():
 app.include_router(document.router, prefix="/api/document")
 app.include_router(indexing.router, prefix="/api/indexing")
 app.include_router(chat.router, prefix="/api/chat")
+app.include_router(chat_session.router, prefix="/api/chat_session")
 
 app.add_middleware(
     CORSMiddleware,

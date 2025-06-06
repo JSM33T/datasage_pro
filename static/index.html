@@ -38,104 +38,17 @@
 		<div class="mb-3">
 			<h5>Chat</h5>
 			<textarea class="form-control mb-2" id="chatQuery" rows="2" placeholder="Ask a question..."></textarea>
-			<button class="btn btn-info" onclick="chatWithDocs()">Send</button>
+			<button class="btn btn-info" id="sendBtn">Send</button>
 		</div>
 
 		<!-- Response Section -->
 		<div>
-			<h6>Answer:</h6>
-			<div id="chatResponse" class="border p-2 bg-light"></div>
+			<h6>Conversation:</h6>
+			<div id="chatResponse" class="border p-2 bg-light" style="min-height: 150px;"></div>
 		</div>
 	</div>
 
-	<script>
-		const API_BASE = "/api";
-		const INDEX_ROUTE = `${API_BASE}/indexing/index`;
-		const CHAT_ROUTE = `${API_BASE}/chat/chat`;
-
-		async function fetchDocs() {
-			const res = await fetch(`${API_BASE}/document/list`);
-			const docs = await res.json();
-			const list = document.getElementById("docList");
-			list.innerHTML = "";
-
-			docs.forEach(doc => {
-				const li = document.createElement("li");
-				li.className = "list-group-item d-flex justify-content-between align-items-center";
-
-				const left = document.createElement("div");
-				left.innerHTML = `
-          <strong>${doc.name}</strong> <small class="text-muted">(${doc.filename})</small><br/>
-          Indexed: <span class="${doc.isIndexed ? 'text-success' : 'text-danger'}">${doc.isIndexed}</span>
-        `;
-
-				const right = document.createElement("div");
-
-				if (doc.isIndexed) {
-					const checkbox = document.createElement("input");
-					checkbox.type = "checkbox";
-					checkbox.className = "form-check-input me-2";
-					checkbox.value = doc.id;
-					checkbox.name = "docCheckbox";
-					right.appendChild(checkbox);
-				} else {
-					const button = document.createElement("button");
-					button.className = "btn btn-warning btn-sm";
-					button.innerText = "Index";
-					button.onclick = async () => {
-						button.disabled = true;
-						await fetch(INDEX_ROUTE, {
-							method: "POST",
-							headers: { "Content-Type": "application/json" },
-							body: JSON.stringify({ doc_ids: [doc.id] })
-						});
-						await fetchDocs();
-					};
-					right.appendChild(button);
-				}
-
-				li.appendChild(left);
-				li.appendChild(right);
-				list.appendChild(li);
-			});
-		}
-
-		document.getElementById("uploadForm").addEventListener("submit", async (e) => {
-			e.preventDefault();
-			const formData = new FormData();
-			formData.append("file", document.getElementById("docFile").files[0]);
-			formData.append("name", document.getElementById("docName").value);
-			formData.append("description", document.getElementById("docDescription").value);
-
-			await fetch(`${API_BASE}/document/add`, {
-				method: "POST",
-				body: formData
-			});
-
-			await fetchDocs();
-		});
-
-		async function chatWithDocs() {
-			const query = document.getElementById("chatQuery").value;
-			const ids = Array.from(document.querySelectorAll('input[name="docCheckbox"]:checked')).map(cb => cb.value);
-
-			if (ids.length === 0 || !query.trim()) {
-				alert("Select at least one indexed document and enter a question.");
-				return;
-			}
-
-			const res = await fetch(CHAT_ROUTE, {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ doc_ids: ids, query })
-			});
-
-			const data = await res.json();
-			document.getElementById("chatResponse").innerText = data.answer || JSON.stringify(data);
-		}
-
-		fetchDocs();
-	</script>
+	<script src="/static/app.js"></script>
 </body>
 
 </html>
