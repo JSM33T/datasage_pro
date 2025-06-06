@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+	<meta charset="UTF-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+	<title>Document Chat UI</title>
+	<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet" />
+</head>
+
+<body class="p-4">
+	<div class="container">
+		<h2 class="mb-4">Document Chat</h2>
+
+		<!-- Upload Section -->
+		<div class="mb-4">
+			<h5>Upload Document</h5>
+			<form id="uploadForm">
+				<div class="mb-2">
+					<input type="file" class="form-control" id="docFile" required />
+				</div>
+				<div class="mb-2">
+					<input type="text" class="form-control" id="docName" placeholder="Document name" required />
+					<input type="text" class="form-control" id="docDescription" placeholder="Document description"
+						required />
+				</div>
+				<button type="submit" class="btn btn-primary">Upload</button>
+			</form>
+		</div>
+
+		<!-- Document List -->
+		<div class="mb-4">
+			<h5>Available Documents</h5>
+			<ul id="docList" class="list-group"></ul>
+		</div>
+
+		<!-- Chat Section -->
+		<div class="mb-3">
+			<h5>Chat</h5>
+			<textarea class="form-control mb-2" id="chatQuery" rows="2" placeholder="Ask a question..."></textarea>
+			<button class="btn btn-info" onclick="chatWithDocs()">Send</button>
+		</div>
+
+		<!-- Response Section -->
+		<div>
+			<h6>Answer:</h6>
+			<div id="chatResponse" class="border p-2 bg-light"></div>
+		</div>
+	</div>
+
+	<script>
+		const API_BASE = "/api";
+		const INDEX_ROUTE = `${API_BASE}/indexing/index`;
+		const CHAT_ROUTE = `${API_BASE}/chat/chat`;
+
+		async function fetchDocs() {
+			const res = await fetch(`${API_BASE}/document/list`);
+			const docs = await res.json();
+			const list = document.getElementById("docList");
+			list.innerHTML = "";
+
+			docs.forEach(doc => {
+				const li = document.createElement("li");
+				li.className = "list-group-item d-flex justify-content-between align-items-center";
+
+				const left = document.createElement("div");
+				left.innerHTML = `
+          <strong>${doc.name}</strong> <small class="text-muted">(${doc.filename})</small><br/>
+          Indexed: <span class="${doc.isIndexed ? 'text-success' : 'text-danger'}">${doc.isIndexed}</span>
+        `;
+
+				const right = document.createElement("div");
+
+				if (doc.isIndexed) {
+					const checkbox = document.createElement("input");
+					checkbox.type = "checkbox";
+					checkbox.className = "form-check-input me-2";
+					checkbox.value = doc.id;
+					checkbox.name = "docCheckbox";
+					right.appendChild(checkbox);
+				} else {
+					const button = document.createElement("button");
+					button.className = "btn btn-warning btn-sm";
+					button.innerText = "Index";
+					button.onclick = async () => {
+						button.disabled = true;
+						await fetch(INDEX_ROUTE, {
+							method: "POST",
+							headers: { "Content-Type": "application/json" },
+							body: JSON.stringify({ doc_ids: [doc.id] })
+						});
+						await fetchDocs();
+					};
+					right.appendChild(button);
+				}
+
+				li.appendChild(left);
+				li.appendChild(right);
+				list.appendChild(li);
+			});
+		}
+
+		document.getElementById("uploadForm").addEventListener("submit", async (e) => {
+			e.preventDefault();
+			const formData = new FormData();
+			formData.append("file", document.getElementById("docFile").files[0]);
+			formData.append("name", document.getElementById("docName").value);
+			formData.append("description", document.getElementById("docDescription").value);
+
+			await fetch(`${API_BASE}/document/add`, {
+				method: "POST",
+				body: formData
+			});
+
+			await fetchDocs();
+		});
+
+		async function chatWithDocs() {
+			const query = document.getElementById("chatQuery").value;
+			const ids = Array.from(document.querySelectorAll('input[name="docCheckbox"]:checked')).map(cb => cb.value);
+
+			if (ids.length === 0 || !query.trim()) {
+				alert("Select at least one indexed document and enter a question.");
+				return;
+			}
+
+			const res = await fetch(CHAT_ROUTE, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ doc_ids: ids, query })
+			});
+
+			const data = await res.json();
+			document.getElementById("chatResponse").innerText = data.answer || JSON.stringify(data);
+		}
+
+		fetchDocs();
+	</script>
+</body>
+
+</html>
