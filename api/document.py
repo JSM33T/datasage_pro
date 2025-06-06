@@ -1,12 +1,14 @@
 import uuid
 from datetime import datetime
 from pathlib import Path
-from fastapi import APIRouter, UploadFile, File, Form
+from fastapi import APIRouter, UploadFile, File, Form,Query
 from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
 from pymongo import MongoClient
 import os
 import shutil
+import re
+
 from fastapi import Body
 
 load_dotenv()
@@ -21,6 +23,84 @@ client = MongoClient(os.getenv("MONGO_URI"))
 db = client[os.getenv("MONGO_DB")]
 collection = db["documents"]
 
+# Ensure text index exists
+collection.create_index([
+    ("name", "text"),
+    ("description", "text"),
+    ("generatedSummary", "text")
+], name="DocumentTextIndex", default_language='english')
+
+# @router.get("/search")
+# def search_documents(query: str = Query(..., min_length=1)):
+#     # Case-insensitive regex search in name or filename first
+#     primary_results = list(collection.find(
+#         {
+#             "isIndexed": True,
+#             "$or": [
+#                 {"name": {"$regex": re.escape(query), "$options": "i"}},
+#                 {"filename": {"$regex": re.escape(query), "$options": "i"}}
+#             ]
+#         },
+#         {"_id": 1, "name": 1, "filename": 1, "isIndexed": 1, "description": 1, "generatedSummary": 1, "dateAdded": 1}
+#     ))
+
+#     if primary_results:
+#         results = primary_results
+#     else:
+#         results = list(collection.find(
+#             {
+#                 "isIndexed": True,
+#                 "description": {"$regex": re.escape(query), "$options": "i"}
+#             },
+#             {"_id": 1, "name": 1, "filename": 1, "isIndexed": 1, "description": 1, "generatedSummary": 1, "dateAdded": 1}
+#         ))
+
+#     for doc in results: 
+#         doc["id"] = str(doc["_id"])
+#         del doc["_id"]
+
+#     return results
+
+# Mongo setup
+client = MongoClient(os.getenv("MONGO_URI"))
+db = client[os.getenv("MONGO_DB")]
+collection = db["documents"]
+
+@router.get("/search")
+def search_documents(query: str = Query(..., min_length=1)):
+    # Case-insensitive regex search in name or filename first
+    primary_results = list(collection.find(
+        {
+            "isIndexed": True,
+            "$or": [
+                {"name": {"$regex": re.escape(query), "$options": "i"}},
+                {"filename": {"$regex": re.escape(query), "$options": "i"}}
+            ]
+        },
+        {"_id": 1, "name": 1, "filename": 1, "isIndexed": 1, "description": 1, "generatedSummary": 1, "dateAdded": 1}
+    ))
+
+    # Convert ObjectId to string for all results
+    def process_docs(docs):
+        for doc in docs:
+            doc["id"] = str(doc.get("_id", doc.get("id")))
+            doc.pop("_id", None)
+        return docs
+
+    if primary_results:
+        return process_docs(primary_results)
+
+    secondary_results = list(collection.find(
+        {
+            "isIndexed": True,
+            "description": {"$regex": re.escape(query), "$options": "i"}
+        },
+        {"_id": 1, "name": 1, "filename": 1, "isIndexed": 1, "description": 1, "generatedSummary": 1, "dateAdded": 1}
+    ))
+
+    return process_docs(secondary_results)
+
+ 
 @router.post("/add")
 async def add_document(
     file: UploadFile = File(...),

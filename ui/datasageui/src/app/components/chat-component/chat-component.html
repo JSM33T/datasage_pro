@@ -1,0 +1,62 @@
+<div class="container my-4">
+	<!-- Search bar -->
+	<div class="mb-3">
+		<label class="form-label fw-bold">Search Documents</label>
+		<input type="text" [(ngModel)]="searchTerm" (input)="searchDocuments()" class="form-control"
+			placeholder="Search indexed documents..." />
+	</div>
+
+	<!-- Pinned documents -->
+	<div *ngIf="pinnedDocs.length > 0" class="mb-3">
+		<label class="form-label fw-bold">Pinned Documents</label>
+		<div class="d-flex flex-wrap gap-2">
+			<span *ngFor="let doc of pinnedDocs" class="badge bg-secondary">
+				{{ doc.name }}
+				<button type="button" class="btn-close btn-close-white btn-sm ms-1" aria-label="Unpin"
+					(click)="togglePin(doc)"></button>
+			</span>
+		</div>
+	</div>
+
+	<!-- Search result list -->
+	<div class="mb-4">
+		<label class="form-label fw-bold">Search Results</label>
+		<ul class="list-group">
+			<li *ngFor="let doc of visibleDocs"
+				class="list-group-item d-flex justify-content-between align-items-center">
+				<div>
+					<div><strong>{{ doc.name }}</strong></div>
+					<div class="text-muted small">{{ doc.filename }}</div>
+				</div>
+				<div class="d-flex align-items-center">
+					<input type="checkbox" class="form-check-input me-2" [checked]="selectedDocIds.includes(doc.id)"
+						(change)="toggleSelect(doc.id, $event)" />
+					<button class="btn btn-outline-secondary btn-sm" (click)="togglePin(doc)">
+						{{ getPinLabel(doc.id) }}
+					</button>
+				</div>
+			</li>
+		</ul>
+	</div>
+
+	<!-- Chat area -->
+	<div class="mb-3">
+		<label class="form-label fw-bold">Chat</label>
+		<div class="border rounded p-3" style="height: 300px; overflow-y: auto; background: #f8f9fa;">
+			<div *ngFor="let msg of messages" class="mb-2">
+				<div [ngClass]="getMessageClass(msg.role)">
+					<strong>{{ msg.role }}:</strong> {{ msg.content }}
+				</div>
+			</div>
+			<div *ngIf="loading" class="text-muted">Assistant is typing...</div>
+		</div>
+	</div>
+
+	<!-- Chat input -->
+	<div class="d-flex">
+		<input type="text" [(ngModel)]="query" class="form-control me-2" placeholder="Type your message..." />
+		<button class="btn btn-success" (click)="sendMessage()" [disabled]="loading">
+			Send
+		</button>
+	</div>
+</div>

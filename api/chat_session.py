@@ -32,7 +32,7 @@ def get_embedding(text: str):
 # === Context retrieval from FAISS + .pkl ===
 def retrieve_context_from_faiss(doc_ids, query, top_k=3):
     combined_index = None
-    all_metadata = []
+    all_text_chunks = []
 
     for doc_id in doc_ids:
         doc_dir = RESOURCE_DIR / doc_id
@@ -45,26 +45,27 @@ def retrieve_context_from_faiss(doc_ids, query, top_k=3):
         index = faiss.read_index(str(faiss_path))
         with open(pkl_path, "rb") as f:
             meta = pickle.load(f)
-            all_metadata.append(meta)
+            text_chunks = meta.get("text", [])
+            if isinstance(text_chunks, str):
+                text_chunks = [text_chunks]
+
+        all_text_chunks.extend(text_chunks)
 
         if combined_index is None:
             combined_index = index
         else:
             combined_index.merge_from(index)
 
-    if combined_index is None or not all_metadata:
+    if combined_index is None or not all_text_chunks:
         return "No relevant document content found."
 
     query_vec = get_embedding(query)
     D, I = combined_index.search(query_vec, top_k)
 
     matched_chunks = []
-    for i in I[0]:
-        for meta in all_metadata:
-            text = meta.get("text", "")
-            if text:
-                matched_chunks.append(text)
-                break
+    for idx in I[0]:
+        if 0 <= idx < len(all_text_chunks):
+            matched_chunks.append(all_text_chunks[idx])
 
     return "\n\n".join(matched_chunks)
 
