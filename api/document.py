@@ -20,7 +20,7 @@ RESOURCE_DIR.mkdir(exist_ok=True)
 
 # Mongo setup
 client = MongoClient(os.getenv("MONGO_URI"))
-db = client[os.getenv("MONGO_DB")]
+db = client[os.getenv("MONGO_DB")] # type: ignore
 collection = db["documents"]
 
 # Ensure text index exists
@@ -63,7 +63,7 @@ collection.create_index([
 
 # Mongo setup
 client = MongoClient(os.getenv("MONGO_URI"))
-db = client[os.getenv("MONGO_DB")]
+db = client[os.getenv("MONGO_DB")] # type: ignore
 collection = db["documents"]
 
 @router.get("/search")
@@ -100,6 +100,17 @@ def search_documents(query: str = Query(..., min_length=1)):
 
     return process_docs(secondary_results)
 
+@router.get("/by_ids")
+def get_documents_by_ids(ids: str = Query(..., description="Comma-separated document IDs")):
+    id_list = ids.split(",")
+    docs = list(collection.find(
+        {"_id": {"$in": id_list}},
+        {"_id": 1, "name": 1, "filename": 1, "isIndexed": 1, "description": 1, "generatedSummary": 1, "dateAdded": 1}
+    ))
+    for doc in docs:
+        doc["id"] = str(doc["_id"])
+        del doc["_id"]
+    return docs
  
 @router.post("/add")
 async def add_document(
@@ -116,7 +127,7 @@ async def add_document(
         doc_dir = RESOURCE_DIR / doc_id
         doc_dir.mkdir(parents=True, exist_ok=True)
 
-        file_path = doc_dir / file.filename
+        file_path = doc_dir / file.filename # type: ignore
         with open(file_path, "wb") as f:
             f.write(await file.read())
 
