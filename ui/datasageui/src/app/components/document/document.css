@@ -1,0 +1,30 @@
+.container {
+	width: 100%;
+	max-width: 1140px;
+	margin: 0 auto;
+}
+
+.row {
+	display: flex;
+	flex-wrap: wrap;
+	margin: -0.5rem;
+}
+
+.col-12 {
+	flex: 0 0 100%;
+	max-width: 100%;
+	padding: 0.5rem;
+}
+
+.col-md-6 {
+	flex: 0 0 100%;
+	max-width: 100%;
+	padding: 0.5rem;
+}
+
+@media (min-width: 768px) {
+	.col-md-6 {
+		flex: 0 0 50%;
+		max-width: 50%;
+	}
+}

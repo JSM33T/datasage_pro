@@ -15,7 +15,7 @@ router = APIRouter()
 
 RESOURCE_DIR = Path("./resources")
 client = MongoClient(os.getenv("MONGO_URI"))
-db = client[os.getenv("MONGO_DB")]
+db = client[os.getenv("MONGO_DB")] # type: ignore
 docs = db["documents"]
 
 openai_client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -66,16 +66,16 @@ async def chat_with_docs(data: dict = Body(...)):
         context = "\n\n".join(all_metadata[i].get("text", "") for i in I[0] if i < len(all_metadata))
 
         messages = [
-            {"role": "system", "content": "You are a helpful assistant that answers questions based on provided documents."},
+            {"role": "system", "content": "You are a helpful assistant that answers questions based on provided documents.Be very precise and dont hit around the bush. reply to /json with the jsonified data that you can extract from the document"},
             {"role": "user", "content": f"Context:\n{context}\n\nQuestion: {query}"}
         ]
 
         chat_response = openai_client.chat.completions.create(
             model="gpt-3.5-turbo",
-            messages=messages
+            messages=messages # type: ignore
         )
 
-        answer = chat_response.choices[0].message.content.strip()
+        answer = chat_response.choices[0].message.content.strip() # type: ignore
 
         return {
             "query": query,

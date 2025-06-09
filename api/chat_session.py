@@ -17,7 +17,7 @@ router = APIRouter()
 
 RESOURCE_DIR = Path("./resources")
 client = MongoClient(os.getenv("MONGO_URI"))
-db = client[os.getenv("MONGO_DB")]
+db = client[os.getenv("MONGO_DB")] # type: ignore
 sessions = db["chat_sessions"]
 openai_client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
@@ -121,13 +121,13 @@ def continue_chat(data: dict = Body(...)):
         messages=[
             {
                 "role": "system",
-                "content": "You are a helpful assistant. Use the following documents to answer accurately:\n\n" + context_text
+                "content": "You are a helpful assistant. Use the following documents to answer accurately and precisely wihtout hitting around the bush :\n\n" + context_text
             },
             *messages
         ]
     )
 
-    reply = gpt_response.choices[0].message.content.strip()
+    reply = gpt_response.choices[0].message.content.strip() # type: ignore
     messages.append({ "role": "assistant", "content": reply })
 
     sessions.update_one({ "_id": session_id }, { "$set": { "messages": messages } })

@@ -1,41 +1,59 @@
-<div class="mat-chat-layout">
-	<mat-card class="mat-chat-left">
-		<mat-form-field appearance="outline" class="w-100 mb-3">
-			<mat-label>Search Documents</mat-label>
-			<input matInput [(ngModel)]="searchTerm" (input)="searchDocuments()"
-				placeholder="Search indexed documents..." />
-		</mat-form-field>
-		<div class="mb-2 mat-body-strong">Results</div>
-		<mat-list>
-			<mat-list-item *ngFor="let doc of visibleDocs" class="mat-list-item-row">
-				<div class="flex-grow-1">
-					<div matLine class="fw-bold">{{ doc.name }}</div>
-					<div matLine class="text-muted small">{{ doc.filename }}</div>
-				</div>
-				<mat-checkbox [checked]="selectedDocIds.includes(doc.id)"
-					(change)="toggleSelect(doc.id, $event.checked)" aria-label="Select document"></mat-checkbox>
-				<button mat-icon-button color="primary" (click)="togglePin(doc)" [attr.aria-pressed]="isPinned(doc.id)">
-					<mat-icon>{{ isPinned(doc.id) ? 'push_pin' : 'push_pin' }}</mat-icon>
-				</button>
-			</mat-list-item>
-		</mat-list>
-	</mat-card>
-
-	<mat-card class="mat-chat-right d-flex flex-column">
-		<div class="chat-messages flex-grow-1">
-			<div *ngFor="let msg of messages" class="mb-2">
-				<span [ngClass]="getMessageClass(msg.role)">
-					<b>{{ msg.role }}:</b> {{ msg.content }}
-				</span>
+<!-- chat-component.html -->
+<div class="row g-4">
+	<!-- Left Panel: Search & Results -->
+	<div class="col-md-4">
+		<div class="card shadow-sm p-3 h-100 d-flex flex-column">
+			<div class="mb-3">
+				<label class="form-label">Search Documents</label>
+				<input type="text" class="form-control" [(ngModel)]="searchTerm" (input)="searchDocuments()"
+					placeholder="Search indexed documents..." />
 			</div>
-			<div *ngIf="loading" class="text-muted">Assistant is typing...</div>
+
+			<div class="fw-semibold mb-2">Results</div>
+			<ul class="list-group overflow-auto" style="max-height: 60vh;">
+				<li class="list-group-item d-flex justify-content-between align-items-start"
+					*ngFor="let doc of visibleDocs">
+					<div class="me-2 flex-grow-1">
+						<div class="fw-bold">{{ doc.name }}</div>
+						<div class="text-muted small">{{ doc.filename }}</div>
+					</div>
+
+					<div class="d-flex align-items-center gap-2">
+						<input type="checkbox" class="form-check-input" [checked]="selectedDocIds.includes(doc.id)"
+							(input)="onCheckboxChange($event, doc.id)" />
+						<button type="button" class="btn btn-sm btn-outline-primary" (click)="togglePin(doc)"
+							[attr.aria-pressed]="isPinned(doc.id)">
+							<i
+								[ngClass]="isPinned(doc.id) ? 'bi bi-pin-angle-fill text-primary' : 'bi bi-pin-angle text-muted'"></i>
+						</button>
+
+					</div>
+				</li>
+			</ul>
 		</div>
-		<form class="chat-input-row" (ngSubmit)="sendMessage()">
-			<mat-form-field appearance="outline" class="flex-grow-1 m-0">
-				<input matInput [(ngModel)]="query" name="chatQuery" placeholder="Type your message..."
-					[disabled]="loading" />
-			</mat-form-field>
-			<button mat-raised-button color="primary" [disabled]="loading || !query.trim()" type="submit">Send</button>
-		</form>
-	</mat-card>
+	</div>
+
+	<!-- Right Panel: Chat -->
+	<div class="col-md-8">
+		<div class="card shadow-sm p-3 h-100 d-flex flex-column">
+			<!-- Chat Messages -->
+			<div class="flex-grow-1 overflow-auto mb-3" style="max-height: 60vh;">
+				<div *ngFor="let msg of messages" class="mb-2">
+					<div [ngClass]="getMessageClass(msg.role)">
+						<strong>{{ msg.role }}:</strong> {{ msg.content }}
+					</div>
+				</div>
+				<div *ngIf="loading" class="text-muted">Assistant is typing...</div>
+			</div>
+
+			<!-- Chat Input -->
+			<form class="d-flex gap-2 mt-auto" (ngSubmit)="sendMessage()">
+				<input type="text" class="form-control" [(ngModel)]="query" name="chatQuery"
+					placeholder="Type your message..." [disabled]="loading" />
+				<button type="submit" class="btn btn-primary" [disabled]="loading || !query.trim()">
+					Send
+				</button>
+			</form>
+		</div>
+	</div>
 </div>

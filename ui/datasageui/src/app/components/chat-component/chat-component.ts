@@ -5,34 +5,11 @@ import { FormsModule } from '@angular/forms';
 import { HttpClient } from '@angular/common/http';
 import { environment } from '../../../environments/environment';
 
-import { MatCardModule } from '@angular/material/card';
-import { MatFormFieldModule } from '@angular/material/form-field';
-import { MatInputModule } from '@angular/material/input';
-import { MatButtonModule } from '@angular/material/button';
-import { MatCheckboxModule } from '@angular/material/checkbox';
-import { MatChipsModule } from '@angular/material/chips';
-import { MatIconModule } from '@angular/material/icon';
-import { MatListModule } from '@angular/material/list';
-import { MatGridList, MatGridTile, MatGridTileText } from '@angular/material/grid-list';
-
 
 @Component({
 	selector: 'app-chat-component',
 	standalone: true,
-	imports: [CommonModule, FormsModule,
-		MatChipsModule,
-		MatGridList,
-		MatGridTile,
-		MatCardModule,
-		MatFormFieldModule,
-		MatInputModule,
-		MatButtonModule,
-		MatCheckboxModule,
-		MatFormFieldModule,
-		MatChipsModule,
-		MatInputModule,
-		MatIconModule,
-		MatListModule,],
+	imports: [CommonModule, FormsModule],
 	templateUrl: `chat-component.html`
 })
 export class ChatComponent implements OnInit {
@@ -118,6 +95,11 @@ export class ChatComponent implements OnInit {
 
 	isPinned(docId: string): boolean {
 		return this.pinnedDocs.some(d => d.id === docId);
+	}
+
+	onCheckboxChange(event: Event, docId: string): void {
+		const checked = (event.target as HTMLInputElement).checked;
+		this.toggleSelect(docId, checked);
 	}
 
 	async sendMessage(): Promise<void> {
