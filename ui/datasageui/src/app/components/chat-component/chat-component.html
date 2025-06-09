@@ -40,7 +40,8 @@
 			<div class="flex-grow-1 overflow-auto mb-3" style="max-height: 60vh;">
 				<div *ngFor="let msg of messages" class="mb-2">
 					<div [ngClass]="getMessageClass(msg.role)">
-						<strong>{{ msg.role }}:</strong> {{ msg.content }}
+						<strong>{{ msg.role }}:</strong>
+						<div [innerHTML]="formatMessage(msg.content)"></div>
 					</div>
 				</div>
 				<div *ngIf="loading" class="text-muted">Assistant is typing...</div>

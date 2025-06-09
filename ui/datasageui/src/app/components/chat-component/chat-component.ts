@@ -5,6 +5,11 @@ import { FormsModule } from '@angular/forms';
 import { HttpClient } from '@angular/common/http';
 import { environment } from '../../../environments/environment';
 
+import * as Prism from 'prismjs';
+import 'prismjs/components/prism-python';     // add more as needed
+import 'prismjs/components/prism-typescript';
+import 'prismjs/components/prism-javascript';
+
 
 @Component({
 	selector: 'app-chat-component',
@@ -34,6 +39,7 @@ export class ChatComponent implements OnInit {
 				const res: any = await this.http.get(`${environment.apiBase}/chat_session/get_session/${savedSession}`).toPromise();
 				this.messages = res.messages || [];
 				this.selectedDocIds = res.doc_ids || [];
+				setTimeout(() => Prism.highlightAll(), 0);
 			} catch (err) {
 				console.error('Session fetch failed:', err);
 				this.sessionId = null;
@@ -102,6 +108,26 @@ export class ChatComponent implements OnInit {
 		this.toggleSelect(docId, checked);
 	}
 
+	formatMessage(text: string): string {
+		if (!text) return '';
+
+		// Escape HTML
+		const escaped = text
+			.replace(/&/g, '&amp;')
+			.replace(/</g, '&lt;')
+			.replace(/>/g, '&gt;');
+
+		// Replace ```lang\ncode``` blocks
+		const codeBlockRegex = /```(\w+)?\n([\s\S]*?)```/g;
+		const formatted = escaped.replace(codeBlockRegex, (_, lang, code) => {
+			return `<pre><code class="language-${lang || 'plaintext'}">${code}</code></pre>`;
+		});
+
+		// Replace single newlines with <br> (but not inside code)
+		return formatted
+			.replace(/(?!<\/pre>)\n/g, '<br>');
+	}
+
 	async sendMessage(): Promise<void> {
 		const text = this.query.trim();
 		if (!text || this.selectedDocIds.length === 0) {
@@ -137,6 +163,7 @@ export class ChatComponent implements OnInit {
 
 			//this.messages.push(...res.messages.filter((m: { role: string }) => m.role === 'assistant'));
 			this.messages = res.messages;
+			setTimeout(() => Prism.highlightAll(), 0);
 		} catch (err) {
 			console.error('Failed to continue session:', err);
 		}
