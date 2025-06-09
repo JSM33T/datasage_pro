@@ -46,6 +46,16 @@ export class ChatComponent implements OnInit {
 
 	constructor(private http: HttpClient) { }
 
+	ngAfterViewChecked() {
+		this.scrollToBottom();
+	}
+
+	private scrollToBottom(): void {
+		try {
+			this.chatWindowRef.nativeElement.scrollTop = this.chatWindowRef.nativeElement.scrollHeight;
+		} catch (err) { }
+	}
+
 	async ngOnInit(): Promise<void> {
 		await this.loadSessionOptions();
 		const savedSession = localStorage.getItem('activeSession');

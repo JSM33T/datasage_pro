@@ -58,26 +58,34 @@
 	</div>
 
 	<!-- Right Panel: Chat -->
-	<div class="col-md-8 h-100">
-		<div class="card shadow-sm p-3 h-100 d-flex flex-column">
-			<!-- Chat Messages -->
-			<!-- Chat Messages -->
-			<div class="mb-3 overflow-auto" style="max-height: 80vh;">
-				<div *ngFor="let msg of messages" class="mb-3">
-					<div [ngClass]="getMessageClass(msg.role)">
-						<strong>{{ msg.role }}:</strong>
-						<div [innerHTML]="formatMessage(msg.content)"></div>
+	<div class="col-md-8 d-flex flex-column" style="height: 50vh;">
+		<div class="card shadow-sm p-3 flex-grow-1 d-flex flex-column">
+			<!-- Chat Messages Scrollable Area -->
+			<div class="flex-grow-1 chat-body overflow-auto px-3" #chatWindow style="max-height:80vh">
+				<div *ngFor="let msg of messages" class="mb-4" style="max-width: 640px;"
+					[ngClass]="{ 'ms-auto': msg.role === 'user' }">
+					<div class="d-flex align-items-end mb-2" [ngClass]="{ 'flex-row-reverse': msg.role === 'user' }">
+						<div class="flex-shrink-0 pe-2 ps-2">
+							<img class="rounded-circle"
+								src="https://i.pinimg.com/originals/0c/67/5a/0c675a8e1061478d2b7b21b330093444.gif"
+								width="40" alt="avatar">
+						</div>
+						<div [ngClass]="msg.role === 'user' ? 'message-box-end bg-primary text-white' : 'message-box-start bg-light text-dark'"
+							[innerHTML]="formatMessage(msg.content)"></div>
+					</div>
+					<div class="fs-xs text-body-secondary text-end">
+						<i class="ai-check text-primary fs-xl mt-n1 me-1" *ngIf="msg.role === 'user'"></i>
+						{{ 'Just now' }}
 					</div>
 				</div>
 				<div *ngIf="loading" class="text-muted">Assistant is typing...</div>
 			</div>
+
 			<!-- Chat Input -->
-			<form class="d-flex gap-2 mt-auto" (ngSubmit)="sendMessage()">
+			<form class="d-flex gap-2 mt-3 pt-2 border-top" (ngSubmit)="sendMessage()">
 				<input type="text" class="form-control" [(ngModel)]="query" name="chatQuery"
 					placeholder="Type your message..." [disabled]="loading" />
-				<button type="submit" class="btn btn-primary" [disabled]="loading || !query.trim()">
-					Send
-				</button>
+				<button type="submit" class="btn btn-primary" [disabled]="loading || !query.trim()">Send</button>
 			</form>
 		</div>
 	</div>
