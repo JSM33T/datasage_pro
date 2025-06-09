@@ -1,14 +1,43 @@
-<!-- chat-component.html -->
 <div class="row g-4">
-	<!-- Left Panel: Search & Results -->
+	<!-- Left Panel: Session + Search + Docs -->
 	<div class="col-md-4">
 		<div class="card shadow-sm p-3 h-100 d-flex flex-column">
+
+			<!-- Session Selector -->
+			<!-- Session Selector -->
+			<div class="mb-3">
+				<label class="form-label">Choose Session</label>
+				<div class="d-flex gap-2">
+					<select class="form-select" [ngModel]="activeSessionId" (ngModelChange)="loadSession($event)">
+						<option *ngFor="let s of sessionOptions" [value]="s.id">
+							{{ s.id.slice(0, 8) }} — {{ s.createdAt | date:'short' }}
+							<span *ngIf="s.documents.length"> [{{ getDocumentNames(s.documents) }}]</span>
+						</option>
+					</select>
+					<button class="btn btn-sm btn-outline-secondary" (click)="startNewSession()">New</button>
+				</div>
+			</div>
+
+			<div class="mb-3">
+				<label class="form-label">Choose Session</label>
+				<select class="form-select" [ngModel]="activeSessionId" (ngModelChange)="loadSession($event)">
+					<option *ngFor="let s of sessionOptions" [value]="s.id">
+						{{ s.id.slice(0, 8) }} — {{ s.createdAt | date:'short' }}
+						<span *ngIf="s.documents.length"> [{{ getDocumentNames(s.documents) }}]</span>
+					</option>
+
+				</select>
+
+			</div>
+
+			<!-- Search Box -->
 			<div class="mb-3">
 				<label class="form-label">Search Documents</label>
 				<input type="text" class="form-control" [(ngModel)]="searchTerm" (input)="searchDocuments()"
 					placeholder="Search indexed documents..." />
 			</div>
 
+			<!-- Document List -->
 			<div class="fw-semibold mb-2">Results</div>
 			<ul class="list-group overflow-auto" style="max-height: 60vh;">
 				<li class="list-group-item d-flex justify-content-between align-items-start"
@@ -26,7 +55,6 @@
 							<i
 								[ngClass]="isPinned(doc.id) ? 'bi bi-pin-angle-fill text-primary' : 'bi bi-pin-angle text-muted'"></i>
 						</button>
-
 					</div>
 				</li>
 			</ul>
@@ -38,7 +66,7 @@
 		<div class="card shadow-sm p-3 h-100 d-flex flex-column">
 			<!-- Chat Messages -->
 			<div class="flex-grow-1 overflow-auto mb-3" style="max-height: 60vh;">
-				<div *ngFor="let msg of messages" class="mb-2">
+				<div *ngFor="let msg of messages" class="mb-3">
 					<div [ngClass]="getMessageClass(msg.role)">
 						<strong>{{ msg.role }}:</strong>
 						<div [innerHTML]="formatMessage(msg.content)"></div>

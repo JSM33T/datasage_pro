@@ -1,54 +1,81 @@
-// src/app/components/chat-component/chat-component.ts
 import { Component, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { HttpClient } from '@angular/common/http';
 import { environment } from '../../../environments/environment';
+import { firstValueFrom } from 'rxjs';
 
 import * as Prism from 'prismjs';
-import 'prismjs/components/prism-python';     // add more as needed
+import 'prismjs/components/prism-python';
 import 'prismjs/components/prism-typescript';
 import 'prismjs/components/prism-javascript';
-
 
 @Component({
 	selector: 'app-chat-component',
 	standalone: true,
 	imports: [CommonModule, FormsModule],
-	templateUrl: `chat-component.html`
+	templateUrl: 'chat-component.html',
 })
 export class ChatComponent implements OnInit {
-	searchTerm: string = '';
+	searchTerm = '';
 	searchResults: any[] = [];
 	pinnedDocs: any[] = [];
 	selectedDocIds: string[] = [];
 	messages: { role: string; content: string }[] = [];
+	query = '';
+	loading = false;
+
 	sessionId: string | null = null;
-	loading: boolean = false;
-	query: string = '';
+	sessionOptions: {
+		id: string;
+		createdAt: string;
+		documents: { _id: string; name: string; filename: string }[];
+	}[] = [];
+	activeSessionId: string | null = null;
 
 	constructor(private http: HttpClient) { }
 
-	// ngOnInit(): void { }
-
 	async ngOnInit(): Promise<void> {
+		await this.loadSessionOptions();
+
 		const savedSession = localStorage.getItem('activeSession');
-		if (savedSession) {
-			this.sessionId = savedSession;
-			try {
-				const res: any = await this.http.get(`${environment.apiBase}/chat_session/get_session/${savedSession}`).toPromise();
-				this.messages = res.messages || [];
-				this.selectedDocIds = res.doc_ids || [];
-				setTimeout(() => Prism.highlightAll(), 0);
-			} catch (err) {
-				console.error('Session fetch failed:', err);
-				this.sessionId = null;
-				this.messages = [];
-			}
+		if (typeof savedSession === 'string') {
+			await this.loadSession(savedSession);
 		}
+	}
+	getDocumentNames(docs: { name: string }[]): string {
+		return docs.map(d => d.name).join(', ');
 	}
 
 
+	async loadSessionOptions() {
+		try {
+			const res: any = await firstValueFrom(
+				this.http.get(`${environment.apiBase}/chat_session/list_sessions`)
+			);
+			this.sessionOptions = res;
+		} catch (err) {
+			console.error('Failed to fetch session list:', err);
+		}
+	}
+
+	async loadSession(sessionId: string) {
+		try {
+			const res: any = await firstValueFrom(
+				this.http.get(`${environment.apiBase}/chat_session/get_session/${sessionId}`)
+			);
+			this.sessionId = res.session_id;
+			this.activeSessionId = sessionId;
+			this.messages = res.messages || [];
+			this.selectedDocIds = res.doc_ids || [];
+			localStorage.setItem('activeSession', sessionId);
+			setTimeout(() => Prism.highlightAll(), 0);
+		} catch (err) {
+			console.error('Failed to load session:', err);
+			this.sessionId = null;
+			this.messages = [];
+		}
+	}
 
 	async searchDocuments() {
 		const term = this.searchTerm.trim();
@@ -56,22 +83,20 @@ export class ChatComponent implements OnInit {
 			this.searchResults = [];
 			return;
 		}
-		const res = await this.http.get<any[]>(`${environment.apiBase}/document/search?query=${encodeURIComponent(term)}`).toPromise();
+		const res = await firstValueFrom(
+			this.http.get<any[]>(
+				`${environment.apiBase}/document/search?query=${encodeURIComponent(term)}`
+			)
+		);
 		this.searchResults = Array.isArray(res) ? res.filter(doc => doc.isIndexed) : [];
 	}
 
-	// get visibleDocs(): any[] {
-	// 	const pinnedIds = new Set(this.pinnedDocs.map(d => d.id));
-	// 	const unpinned = this.searchResults.filter(doc => !pinnedIds.has(doc.id));
-	// 	return [...this.pinnedDocs, ...unpinned.slice(0, 5)];
-	// }
 
 	get visibleDocs(): any[] {
 		const pinnedIds = new Set(this.pinnedDocs.map(d => d.id));
 		const unpinned = this.searchResults.filter(doc => !pinnedIds.has(doc.id));
 		return [...this.pinnedDocs, ...unpinned.slice(0, 5)];
 	}
-
 
 	togglePin(doc: any): void {
 		const index = this.pinnedDocs.findIndex(d => d.id === doc.id);
@@ -83,12 +108,29 @@ export class ChatComponent implements OnInit {
 	}
 
 
+	async startNewSession(): Promise<void> {
+		this.sessionId = null;
+		this.messages = [];
+		this.selectedDocIds = [];
+		localStorage.removeItem('activeSession');
+	}
+
+
+	isPinned(docId: string): boolean {
+		return this.pinnedDocs.some(d => d.id === docId);
+	}
+
 	toggleSelect(docId: string, isChecked: boolean) {
 		if (isChecked) {
 			this.selectedDocIds.push(docId);
 		} else {
 			this.selectedDocIds = this.selectedDocIds.filter(id => id !== docId);
 		}
+	}
+
+	onCheckboxChange(event: Event, docId: string): void {
+		const checked = (event.target as HTMLInputElement).checked;
+		this.toggleSelect(docId, checked);
 	}
 
 	getPinLabel(docId: string): string {
@@ -99,33 +141,19 @@ export class ChatComponent implements OnInit {
 		return role === 'user' ? 'text-primary' : 'text-dark';
 	}
 
-	isPinned(docId: string): boolean {
-		return this.pinnedDocs.some(d => d.id === docId);
-	}
-
-	onCheckboxChange(event: Event, docId: string): void {
-		const checked = (event.target as HTMLInputElement).checked;
-		this.toggleSelect(docId, checked);
-	}
-
 	formatMessage(text: string): string {
 		if (!text) return '';
-
-		// Escape HTML
 		const escaped = text
 			.replace(/&/g, '&amp;')
 			.replace(/</g, '&lt;')
 			.replace(/>/g, '&gt;');
 
-		// Replace ```lang\ncode``` blocks
 		const codeBlockRegex = /```(\w+)?\n([\s\S]*?)```/g;
 		const formatted = escaped.replace(codeBlockRegex, (_, lang, code) => {
 			return `<pre><code class="language-${lang || 'plaintext'}">${code}</code></pre>`;
 		});
 
-		// Replace single newlines with <br> (but not inside code)
-		return formatted
-			.replace(/(?!<\/pre>)\n/g, '<br>');
+		return formatted.replace(/(?!<\/pre>)\n/g, '<br>');
 	}
 
 	async sendMessage(): Promise<void> {
@@ -137,31 +165,34 @@ export class ChatComponent implements OnInit {
 
 		if (!this.sessionId) {
 			try {
-				const res: any = await this.http.post(`${environment.apiBase}/chat_session/start`, {
-					doc_ids: this.selectedDocIds
-				}).toPromise();
+				const res: any = await firstValueFrom(
+					this.http.post(`${environment.apiBase}/chat_session/start`, {
+						doc_ids: this.selectedDocIds,
+					})
+				);
 				this.sessionId = res.session_id;
 				localStorage.setItem('activeSession', this.sessionId ?? '');
+				this.activeSessionId = this.sessionId;
+				if (this.sessionId) {
+					await this.loadSession(this.sessionId);
+				}
 			} catch (err) {
 				console.error('Failed to start session:', err);
 				return;
 			}
 		}
 
-		const sessionId = this.sessionId;
-		if (!sessionId) return;
-
 		this.messages.push({ role: 'user', content: text });
 		this.query = '';
 		this.loading = true;
 
 		try {
-			const res: any = await this.http.post(`${environment.apiBase}/chat_session/continue`, {
-				session_id: sessionId,
-				query: text
-			}).toPromise();
-
-			//this.messages.push(...res.messages.filter((m: { role: string }) => m.role === 'assistant'));
+			const res: any = await firstValueFrom(
+				this.http.post(`${environment.apiBase}/chat_session/continue`, {
+					session_id: this.sessionId,
+					query: text,
+				})
+			);
 			this.messages = res.messages;
 			setTimeout(() => Prism.highlightAll(), 0);
 		} catch (err) {
@@ -170,5 +201,4 @@ export class ChatComponent implements OnInit {
 
 		this.loading = false;
 	}
-
 }

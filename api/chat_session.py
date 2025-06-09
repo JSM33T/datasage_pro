@@ -31,8 +31,40 @@ def get_session(session_id: str):
         "doc_ids": chat["doc_ids"],
         "messages": chat["messages"]
     }
+@router.post("/resolve_docs")
+def resolve_docs(data: dict = Body(...)):
+    doc_ids = data.get("doc_ids", [])
+    documents = db["documents"]
+    found = list(documents.find(
+        { "_id": { "$in": doc_ids } },
+        { "_id": 1, "name": 1, "filename": 1 }
+    ))
+    return found
 
+@router.get("/list_sessions")
+def list_sessions():
+    all_sessions = sessions.find({}, {"_id": 1, "doc_ids": 1, "createdAt": 1})
 
+    # Access documents collection
+    documents = db["documents"]
+
+    enriched_sessions = []
+    for s in all_sessions:
+        doc_ids = s.get("doc_ids", [])
+        doc_meta = list(documents.find(
+            { "_id": { "$in": doc_ids } },
+            { "_id": 1, "name": 1, "filename": 1 }
+        ))
+
+        enriched_sessions.append({
+            "id": s["_id"],
+            "createdAt": s.get("createdAt"),
+            "documents": doc_meta
+        })
+
+    return enriched_sessions
+
+    
 # === Embedding helper ===
 def get_embedding(text: str):
     response = openai_client.embeddings.create(
