@@ -21,6 +21,18 @@ db = client[os.getenv("MONGO_DB")]
 sessions = db["chat_sessions"]
 openai_client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
+@router.get("/get_session/{session_id}")
+def get_session(session_id: str):
+    chat = sessions.find_one({ "_id": session_id })
+    if not chat:
+        return JSONResponse(status_code=404, content={"error": "Session not found"})
+    return {
+        "session_id": chat["_id"],
+        "doc_ids": chat["doc_ids"],
+        "messages": chat["messages"]
+    }
+
+
 # === Embedding helper ===
 def get_embedding(text: str):
     response = openai_client.embeddings.create(

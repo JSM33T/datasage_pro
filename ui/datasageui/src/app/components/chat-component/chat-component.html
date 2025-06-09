@@ -1,62 +1,41 @@
-<div class="container my-4">
-	<!-- Search bar -->
-	<div class="mb-3">
-		<label class="form-label fw-bold">Search Documents</label>
-		<input type="text" [(ngModel)]="searchTerm" (input)="searchDocuments()" class="form-control"
-			placeholder="Search indexed documents..." />
-	</div>
-
-	<!-- Pinned documents -->
-	<div *ngIf="pinnedDocs.length > 0" class="mb-3">
-		<label class="form-label fw-bold">Pinned Documents</label>
-		<div class="d-flex flex-wrap gap-2">
-			<span *ngFor="let doc of pinnedDocs" class="badge bg-secondary">
-				{{ doc.name }}
-				<button type="button" class="btn-close btn-close-white btn-sm ms-1" aria-label="Unpin"
-					(click)="togglePin(doc)"></button>
-			</span>
-		</div>
-	</div>
-
-	<!-- Search result list -->
-	<div class="mb-4">
-		<label class="form-label fw-bold">Search Results</label>
-		<ul class="list-group">
-			<li *ngFor="let doc of visibleDocs"
-				class="list-group-item d-flex justify-content-between align-items-center">
-				<div>
-					<div><strong>{{ doc.name }}</strong></div>
-					<div class="text-muted small">{{ doc.filename }}</div>
+<div class="mat-chat-layout">
+	<mat-card class="mat-chat-left">
+		<mat-form-field appearance="outline" class="w-100 mb-3">
+			<mat-label>Search Documents</mat-label>
+			<input matInput [(ngModel)]="searchTerm" (input)="searchDocuments()"
+				placeholder="Search indexed documents..." />
+		</mat-form-field>
+		<div class="mb-2 mat-body-strong">Results</div>
+		<mat-list>
+			<mat-list-item *ngFor="let doc of visibleDocs" class="mat-list-item-row">
+				<div class="flex-grow-1">
+					<div matLine class="fw-bold">{{ doc.name }}</div>
+					<div matLine class="text-muted small">{{ doc.filename }}</div>
 				</div>
-				<div class="d-flex align-items-center">
-					<input type="checkbox" class="form-check-input me-2" [checked]="selectedDocIds.includes(doc.id)"
-						(change)="toggleSelect(doc.id, $event)" />
-					<button class="btn btn-outline-secondary btn-sm" (click)="togglePin(doc)">
-						{{ getPinLabel(doc.id) }}
-					</button>
-				</div>
-			</li>
-		</ul>
-	</div>
+				<mat-checkbox [checked]="selectedDocIds.includes(doc.id)"
+					(change)="toggleSelect(doc.id, $event.checked)" aria-label="Select document"></mat-checkbox>
+				<button mat-icon-button color="primary" (click)="togglePin(doc)" [attr.aria-pressed]="isPinned(doc.id)">
+					<mat-icon>{{ isPinned(doc.id) ? 'push_pin' : 'push_pin' }}</mat-icon>
+				</button>
+			</mat-list-item>
+		</mat-list>
+	</mat-card>
 
-	<!-- Chat area -->
-	<div class="mb-3">
-		<label class="form-label fw-bold">Chat</label>
-		<div class="border rounded p-3" style="height: 300px; overflow-y: auto; background: #f8f9fa;">
+	<mat-card class="mat-chat-right d-flex flex-column">
+		<div class="chat-messages flex-grow-1">
 			<div *ngFor="let msg of messages" class="mb-2">
-				<div [ngClass]="getMessageClass(msg.role)">
-					<strong>{{ msg.role }}:</strong> {{ msg.content }}
-				</div>
+				<span [ngClass]="getMessageClass(msg.role)">
+					<b>{{ msg.role }}:</b> {{ msg.content }}
+				</span>
 			</div>
 			<div *ngIf="loading" class="text-muted">Assistant is typing...</div>
 		</div>
-	</div>
-
-	<!-- Chat input -->
-	<div class="d-flex">
-		<input type="text" [(ngModel)]="query" class="form-control me-2" placeholder="Type your message..." />
-		<button class="btn btn-success" (click)="sendMessage()" [disabled]="loading">
-			Send
-		</button>
-	</div>
+		<form class="chat-input-row" (ngSubmit)="sendMessage()">
+			<mat-form-field appearance="outline" class="flex-grow-1 m-0">
+				<input matInput [(ngModel)]="query" name="chatQuery" placeholder="Type your message..."
+					[disabled]="loading" />
+			</mat-form-field>
+			<button mat-raised-button color="primary" [disabled]="loading || !query.trim()" type="submit">Send</button>
+		</form>
+	</mat-card>
 </div>
