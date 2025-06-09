@@ -9,6 +9,12 @@ import * as Prism from 'prismjs';
 import 'prismjs/components/prism-python';
 import 'prismjs/components/prism-typescript';
 import 'prismjs/components/prism-javascript';
+import 'prismjs/components/prism-markdown';
+import 'prismjs/components/prism-json';
+import 'prismjs/components/prism-sql';
+import 'prismjs/components/prism-batch';
+
+
 
 @Component({
 	selector: 'app-chat-component',
@@ -141,7 +147,7 @@ export class ChatComponent implements OnInit {
 		return role === 'user' ? 'text-primary' : 'text-dark';
 	}
 
-	formatMessage(text: string): string {
+	formatMessage_old(text: string): string {
 		if (!text) return '';
 		const escaped = text
 			.replace(/&/g, '&amp;')
@@ -155,6 +161,35 @@ export class ChatComponent implements OnInit {
 
 		return formatted.replace(/(?!<\/pre>)\n/g, '<br>');
 	}
+	formatMessage(text: string): string {
+		if (!text) return '';
+
+		const codeBlockRegex = /```(\w+)?\n([\s\S]*?)```/g;
+
+		const codeBlocks: string[] = [];
+		let i = 0;
+
+		// Temporarily replace code blocks with tokens
+		const temp = text.replace(codeBlockRegex, (_, lang, code) => {
+			codeBlocks[i] = `<pre><code class="language-${lang || 'plaintext'}">${code
+				.replace(/&/g, '&amp;')
+				.replace(/</g, '&lt;')
+				.replace(/>/g, '&gt;')}</code></pre>`;
+			return `%%CODEBLOCK_${i++}%%`;
+		});
+
+		// Escape remaining (non-code) text
+		const escaped = temp
+			.replace(/&/g, '&amp;')
+			.replace(/</g, '&lt;')
+			.replace(/>/g, '&gt;')
+			.replace(/\n/g, '<br>');
+
+		// Re-insert code blocks
+		return escaped.replace(/%%CODEBLOCK_(\d+)%%/g, (_, j) => codeBlocks[+j]);
+	}
+
+
 
 	async sendMessage(): Promise<void> {
 		const text = this.query.trim();

@@ -127,7 +127,21 @@ def start_chat(data: dict = Body(...)):
         "messages": [],
         "createdAt": datetime.utcnow()
     })
-    return { "session_id": session_id }
+    new_session = sessions.find_one({ "_id": session_id }, {"_id": 1, "doc_ids": 1, "createdAt": 1 })
+    documents = db["documents"]
+    doc_meta = list(documents.find(
+		{ "_id": { "$in": new_session.get("doc_ids", []) } }, # type: ignore
+		{ "_id": 1, "name": 1, "filename": 1 }
+	))
+
+    return {
+		"session_id": session_id,
+		"session": {
+			"id": new_session["_id"], # type: ignore
+			"createdAt": new_session["createdAt"], # type: ignore
+			"documents": doc_meta
+		}
+	}
 
 # === API: Continue chat ===
 @router.post("/continue")
@@ -144,12 +158,15 @@ def continue_chat(data: dict = Body(...)):
     messages = chat["messages"]
     messages.append({ "role": "user", "content": query })
 
-    # 🧠 Fetch context from FAISS + .pkl
-    context_text = retrieve_context_from_faiss(chat["doc_ids"], query)
+    # Fetch context from FAISS + .pkl
+    #context_text = retrieve_context_from_faiss(chat["doc_ids"], query)
+    fresh_doc_ids = sessions.find_one({"_id": session_id}, {"doc_ids": 1}).get("doc_ids", []) # type: ignore
+    context_text = retrieve_context_from_faiss(fresh_doc_ids, query)
 
-    # 🧠 Call GPT
+
+    # Call GPT
     gpt_response = openai_client.chat.completions.create(
-        model="gpt-3.5-turbo",
+        model=os.getenv("OPENAI_MODEL", "gpt-3.5-turbo"),
         messages=[
             {
                 "role": "system",

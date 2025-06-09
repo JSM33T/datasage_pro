@@ -1,12 +1,13 @@
 import { Component } from '@angular/core';
-import { RouterModule } from '@angular/router';
+import { RouterLink, RouterModule } from '@angular/router';
 import { CommonModule } from '@angular/common';
 
 @Component({
 	selector: 'app-root',
 	imports: [
 		CommonModule,
-		RouterModule
+		RouterModule,
+		RouterLink
 	],
 	templateUrl: 'app.html',
 	styleUrl: 'app.css'

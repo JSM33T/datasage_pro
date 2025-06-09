@@ -19,7 +19,7 @@ router = APIRouter()
 # ENV + DB
 RESOURCE_DIR = Path("./resources")
 client = MongoClient(os.getenv("MONGO_URI"))
-db = client[os.getenv("MONGO_DB")]
+db = client[os.getenv("MONGO_DB")] # type: ignore
 docs = db["documents"]
 
 openai_client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -54,7 +54,7 @@ async def index_document(data: dict = Body(...)):
             # Extract text
             if file_path.suffix == ".pdf":
                 doc = fitz.open(str(file_path))
-                text = "\n".join(page.get_text() for page in doc)
+                text = "\n".join(page.get_text() for page in doc) # type: ignore
             elif file_path.suffix == ".docx":
                 text = docx2txt.process(str(file_path))
             else:
@@ -65,7 +65,7 @@ async def index_document(data: dict = Body(...)):
             embedding = np.array([get_embedding(text)], dtype="float32")
             dim = embedding.shape[1]
             index = faiss.IndexFlatL2(dim)
-            index.add(embedding)
+            index.add(embedding) # type: ignore
 
             # Save .faiss and .pkl
             faiss.write_index(index, str(doc_dir / f"{doc_id}.faiss"))
