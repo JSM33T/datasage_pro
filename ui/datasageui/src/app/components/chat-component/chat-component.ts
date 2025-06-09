@@ -1,4 +1,9 @@
-import { Component, OnInit } from '@angular/core';
+import {
+	Component,
+	OnInit,
+	ViewChild,
+	ElementRef
+} from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { HttpClient } from '@angular/common/http';
@@ -14,8 +19,6 @@ import 'prismjs/components/prism-json';
 import 'prismjs/components/prism-sql';
 import 'prismjs/components/prism-batch';
 
-
-
 @Component({
 	selector: 'app-chat-component',
 	standalone: true,
@@ -23,6 +26,8 @@ import 'prismjs/components/prism-batch';
 	templateUrl: 'chat-component.html',
 })
 export class ChatComponent implements OnInit {
+	@ViewChild('chatWindow') chatWindowRef!: ElementRef;
+
 	searchTerm = '';
 	searchResults: any[] = [];
 	pinnedDocs: any[] = [];
@@ -35,7 +40,7 @@ export class ChatComponent implements OnInit {
 	sessionOptions: {
 		id: string;
 		createdAt: string;
-		documents: { _id: string; name: string; filename: string }[];
+		documents: { _id: string; name: string; filename: string }[]
 	}[] = [];
 	activeSessionId: string | null = null;
 
@@ -43,16 +48,15 @@ export class ChatComponent implements OnInit {
 
 	async ngOnInit(): Promise<void> {
 		await this.loadSessionOptions();
-
 		const savedSession = localStorage.getItem('activeSession');
 		if (typeof savedSession === 'string') {
 			await this.loadSession(savedSession);
 		}
 	}
+
 	getDocumentNames(docs: { name: string }[]): string {
 		return docs.map(d => d.name).join(', ');
 	}
-
 
 	async loadSessionOptions() {
 		try {
@@ -70,16 +74,35 @@ export class ChatComponent implements OnInit {
 			const res: any = await firstValueFrom(
 				this.http.get(`${environment.apiBase}/chat_session/get_session/${sessionId}`)
 			);
+
 			this.sessionId = res.session_id;
 			this.activeSessionId = sessionId;
 			this.messages = res.messages || [];
 			this.selectedDocIds = res.doc_ids || [];
+
 			localStorage.setItem('activeSession', sessionId);
+
+			if (this.selectedDocIds.length > 0) {
+				const docRes = await firstValueFrom(
+					this.http.get<any[]>(
+						`${environment.apiBase}/document/by_ids?ids=${this.selectedDocIds.join(',')}`
+					)
+				);
+
+				// Auto-pin all selected documents
+				this.pinnedDocs = Array.isArray(docRes)
+					? docRes.filter(doc => this.selectedDocIds.includes(doc.id))
+					: [];
+			} else {
+				this.pinnedDocs = [];
+			}
+
 			setTimeout(() => Prism.highlightAll(), 0);
 		} catch (err) {
 			console.error('Failed to load session:', err);
 			this.sessionId = null;
 			this.messages = [];
+			this.pinnedDocs = [];
 		}
 	}
 
@@ -97,7 +120,6 @@ export class ChatComponent implements OnInit {
 		this.searchResults = Array.isArray(res) ? res.filter(doc => doc.isIndexed) : [];
 	}
 
-
 	get visibleDocs(): any[] {
 		const pinnedIds = new Set(this.pinnedDocs.map(d => d.id));
 		const unpinned = this.searchResults.filter(doc => !pinnedIds.has(doc.id));
@@ -113,14 +135,12 @@ export class ChatComponent implements OnInit {
 		}
 	}
 
-
 	async startNewSession(): Promise<void> {
 		this.sessionId = null;
 		this.messages = [];
 		this.selectedDocIds = [];
 		localStorage.removeItem('activeSession');
 	}
-
 
 	isPinned(docId: string): boolean {
 		return this.pinnedDocs.some(d => d.id === docId);
@@ -147,29 +167,14 @@ export class ChatComponent implements OnInit {
 		return role === 'user' ? 'text-primary' : 'text-dark';
 	}
 
-	formatMessage_old(text: string): string {
-		if (!text) return '';
-		const escaped = text
-			.replace(/&/g, '&amp;')
-			.replace(/</g, '&lt;')
-			.replace(/>/g, '&gt;');
-
-		const codeBlockRegex = /```(\w+)?\n([\s\S]*?)```/g;
-		const formatted = escaped.replace(codeBlockRegex, (_, lang, code) => {
-			return `<pre><code class="language-${lang || 'plaintext'}">${code}</code></pre>`;
-		});
-
-		return formatted.replace(/(?!<\/pre>)\n/g, '<br>');
-	}
 	formatMessage(text: string): string {
 		if (!text) return '';
 
 		const codeBlockRegex = /```(\w+)?\n([\s\S]*?)```/g;
-
 		const codeBlocks: string[] = [];
 		let i = 0;
 
-		// Temporarily replace code blocks with tokens
+		// Replace code blocks with tokens
 		const temp = text.replace(codeBlockRegex, (_, lang, code) => {
 			codeBlocks[i] = `<pre><code class="language-${lang || 'plaintext'}">${code
 				.replace(/&/g, '&amp;')
@@ -178,7 +183,7 @@ export class ChatComponent implements OnInit {
 			return `%%CODEBLOCK_${i++}%%`;
 		});
 
-		// Escape remaining (non-code) text
+		// Escape non-code text and replace \n with <br>
 		const escaped = temp
 			.replace(/&/g, '&amp;')
 			.replace(/</g, '&lt;')
@@ -188,8 +193,6 @@ export class ChatComponent implements OnInit {
 		// Re-insert code blocks
 		return escaped.replace(/%%CODEBLOCK_(\d+)%%/g, (_, j) => codeBlocks[+j]);
 	}
-
-
 
 	async sendMessage(): Promise<void> {
 		const text = this.query.trim();
