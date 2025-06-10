@@ -117,7 +117,7 @@ import 'prismjs/components/prism-batch';
 })
 export class Masterchat implements AfterViewChecked {
 	@ViewChild('chatWindow') chatWindowRef!: ElementRef;
-
+	@ViewChild('messageInput') messageInputRef!: ElementRef;
 	messages: { role: string; content: string }[] = [];
 	query = '';
 	loading = false;
@@ -130,11 +130,22 @@ export class Masterchat implements AfterViewChecked {
 		this.scrollToBottom();
 	}
 
-	private scrollToBottom(): void {
+	private scrollToBottom2(): void {
 		try {
 			this.chatWindowRef.nativeElement.scrollTop = this.chatWindowRef.nativeElement.scrollHeight;
 		} catch { }
 	}
+private scrollToBottom(): void {
+	try {
+		this.chatWindowRef.nativeElement.scrollTo({
+			top: this.chatWindowRef.nativeElement.scrollHeight,
+			behavior: 'smooth'
+		});
+		this.messageInputRef.nativeElement.focus();
+	} catch {}
+}
+
+
 
 	formatMessage(text: string): string {
 		if (!text) return '';

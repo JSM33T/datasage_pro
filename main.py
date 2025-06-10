@@ -14,6 +14,7 @@ load_dotenv()
 app = FastAPI()
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
+app.mount("/resources", StaticFiles(directory="resources"), name="resources")
 
 @app.get("/")
 def serve_ui():

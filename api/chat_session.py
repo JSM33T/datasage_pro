@@ -161,7 +161,9 @@ def continue_chat(data: dict = Body(...)):
     # Fetch context from FAISS + .pkl
     #context_text = retrieve_context_from_faiss(chat["doc_ids"], query)
     fresh_doc_ids = sessions.find_one({"_id": session_id}, {"doc_ids": 1}).get("doc_ids", []) # type: ignore
-    context_text = retrieve_context_from_faiss(fresh_doc_ids, query)
+    #context_text = retrieve_context_from_faiss(fresh_doc_ids, query)
+    context_text, _ = retrieve_context_from_faiss(fresh_doc_ids, query)
+
 
 
     # Call GPT
