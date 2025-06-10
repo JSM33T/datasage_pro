@@ -185,3 +185,186 @@ def continue_chat(data: dict = Body(...)):
         "reply": reply,
         "messages": messages
     }
+
+
+@router.post("/start2")
+def start_chat_all_docs():
+    session_id = str(uuid4())
+    documents = db["documents"]
+    all_docs = list(documents.find({}, { "_id": 1, "name": 1, "filename": 1 }))
+    doc_ids = [doc["_id"] for doc in all_docs]
+
+    sessions.insert_one({
+        "_id": session_id,
+        "doc_ids": doc_ids,
+        "messages": [],
+        "createdAt": datetime.utcnow()
+    })
+
+    return {
+        "session_id": session_id,
+        "session": {
+            "id": session_id,
+            "createdAt": datetime.utcnow(),
+            "documents": all_docs
+        }
+    }
+
+
+@router.post("/continue2")
+def continue_chat_all_docs(data: dict = Body(...)):
+    session_id = data.get("session_id")
+    query = data.get("query")
+    if not session_id or not query:
+        return JSONResponse(status_code=400, content={"error": "session_id and query required"})
+
+    chat = sessions.find_one({ "_id": session_id })
+    if not chat:
+        return JSONResponse(status_code=404, content={"error": "Session not found"})
+
+    messages = chat["messages"]
+    messages.append({ "role": "user", "content": query })
+
+    all_doc_ids = [doc["_id"] for doc in db["documents"].find({}, { "_id": 1 })]
+    
+    # Updated: retrieve context and doc_score mapping
+    context_text, doc_score = retrieve_context_from_faiss(all_doc_ids, query)
+
+    gpt_response = openai_client.chat.completions.create(
+        model=os.getenv("OPENAI_MODEL", "gpt-3.5-turbo"),
+        messages=[
+            {
+                "role": "system",
+                "content": "You are a helpful assistant. Use the following documents to answer accurately and precisely without beating around the bush:\n\n" + context_text
+            },
+            *messages
+        ]
+    )
+
+    reply = gpt_response.choices[0].message.content.strip()  # type: ignore
+    messages.append({ "role": "assistant", "content": reply })
+
+    sessions.update_one({ "_id": session_id }, { "$set": { "messages": messages } })
+
+    # Sort docs by relevance score
+    sorted_docs = sorted(doc_score.items(), key=lambda x: x[1], reverse=True)
+    top_doc_ids = [doc_id for doc_id, _ in sorted_docs]
+
+    docs_cursor = db["documents"].find(
+        { "_id": { "$in": top_doc_ids } },
+        { "_id": 1, "name": 1, "filename": 1 }
+    )
+    doc_map = { str(d["_id"]): d for d in docs_cursor }
+
+    matched_docs = [
+        {
+            "doc_id": str(doc_id),
+            "doc_name": doc_map.get(str(doc_id), {}).get("name", ""),
+            "link": f"/resources/{doc_id}/{doc_map.get(str(doc_id), {}).get('filename', '')}",
+            "score": doc_score[doc_id]
+        }
+        for doc_id in top_doc_ids if str(doc_id) in doc_map
+    ]
+
+    return {
+        "reply": reply,
+        "messages": messages,
+        "matched_docs": matched_docs
+    }
+
+
+
+def retrieve_context_from_faiss(doc_ids, query, top_k=5):
+    combined_index = None
+    all_text_chunks = []
+    chunk_doc_map = []
+
+    for doc_id in doc_ids:
+        doc_dir = RESOURCE_DIR / doc_id
+        faiss_path = doc_dir / f"{doc_id}.faiss"
+        pkl_path = doc_dir / f"{doc_id}.pkl"
+
+        if not faiss_path.exists() or not pkl_path.exists():
+            continue
+
+        index = faiss.read_index(str(faiss_path))
+        with open(pkl_path, "rb") as f:
+            meta = pickle.load(f)
+            text_chunks = meta.get("text", [])
+            if isinstance(text_chunks, str):
+                text_chunks = [text_chunks]
+
+        for chunk in text_chunks:
+            all_text_chunks.append(chunk)
+            chunk_doc_map.append(doc_id)
+
+        if combined_index is None:
+            combined_index = index
+        else:
+            combined_index.merge_from(index)
+
+    if combined_index is None or not all_text_chunks:
+        return "No relevant document content found.", []
+
+    query_vec = get_embedding(query)
+    D, I = combined_index.search(query_vec, top_k)
+
+    matched_chunks = []
+    doc_score = {}
+
+    for idx in I[0]:
+        if 0 <= idx < len(all_text_chunks):
+            matched_chunks.append(all_text_chunks[idx])
+            doc_id = chunk_doc_map[idx]
+            doc_score[doc_id] = doc_score.get(doc_id, 0) + 1
+
+    # Sort doc_ids by relevance (more chunk matches = higher)
+    ranked_doc_ids = sorted(doc_score, key=doc_score.get, reverse=True) # type: ignore
+
+    return "\n\n".join(matched_chunks), doc_score
+
+
+
+def retrieve_context_from_faiss2(doc_ids, query, top_k=3):
+    combined_index = None
+    all_text_chunks = []
+    chunk_doc_map = []
+
+    for doc_id in doc_ids:
+        doc_dir = RESOURCE_DIR / doc_id
+        faiss_path = doc_dir / f"{doc_id}.faiss"
+        pkl_path = doc_dir / f"{doc_id}.pkl"
+
+        if not faiss_path.exists() or not pkl_path.exists():
+            continue
+
+        index = faiss.read_index(str(faiss_path))
+        with open(pkl_path, "rb") as f:
+            meta = pickle.load(f)
+            text_chunks = meta.get("text", [])
+            if isinstance(text_chunks, str):
+                text_chunks = [text_chunks]
+
+        for chunk in text_chunks:
+            all_text_chunks.append(chunk)
+            chunk_doc_map.append(doc_id)
+
+        if combined_index is None:
+            combined_index = index
+        else:
+            combined_index.merge_from(index)
+
+    if combined_index is None or not all_text_chunks:
+        return "No relevant document content found.", []
+
+    query_vec = get_embedding(query)
+    D, I = combined_index.search(query_vec, top_k)
+
+    matched_chunks = []
+    matched_doc_ids = set()
+    for idx in I[0]:
+        if 0 <= idx < len(all_text_chunks):
+            matched_chunks.append(all_text_chunks[idx])
+            matched_doc_ids.add(chunk_doc_map[idx])
+
+    return "\n\n".join(matched_chunks), list(matched_doc_ids)

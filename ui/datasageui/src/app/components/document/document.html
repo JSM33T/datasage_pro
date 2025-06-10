@@ -1,80 +1,79 @@
-<!-- Upload Document Card -->
-<div class="card shadow-sm mb-5 p-4">
-	<h5 class="card-title mb-4">Upload Document</h5>
-	<form [formGroup]="uploadForm" (ngSubmit)="uploadDoc()" class="row g-4">
+<div class="row g-4">
 
-		<!-- Document Name -->
-		<div class="col-12">
-			<label class="form-label">Document Name</label>
-			<input type="text" class="form-control" formControlName="name" required />
+	<!-- Upload Document Card -->
+	<div class="col-md-6">
+		<div class="card shadow-sm p-4 h-100">
+			<h5 class="card-title mb-4">Upload Document</h5>
+			<form [formGroup]="uploadForm" (ngSubmit)="uploadDoc()" class="row g-4">
+				<!-- Document Name -->
+				<div class="col-12">
+					<label class="form-label">Document Name</label>
+					<input type="text" class="form-control" formControlName="name" required />
+				</div>
+				<!-- Description -->
+				<div class="col-12">
+					<label class="form-label">Description</label>
+					<textarea class="form-control" formControlName="description" rows="3" required></textarea>
+				</div>
+				<!-- File Input -->
+				<div class="col-12">
+					<label class="form-label">Select File</label>
+					<input type="file" class="form-control" (change)="onFileChange($event)" />
+					<div *ngIf="selectedFile" class="form-text mt-1">Selected: {{ selectedFile.name }}</div>
+				</div>
+				<!-- Upload Button -->
+				<div class="col-12">
+					<button type="submit" class="btn btn-primary w-100"
+						[disabled]="uploading() || !uploadForm.valid || !selectedFile">
+						{{ uploading() ? 'Uploading...' : 'Upload' }}
+					</button>
+				</div>
+			</form>
 		</div>
+	</div>
 
-		<!-- Description -->
-		<div class="col-12">
-			<label class="form-label">Description</label>
-			<textarea class="form-control" formControlName="description" rows="3" required></textarea>
-		</div>
-
-		<!-- File Input -->
-		<div class="col-12">
-			<label class="form-label">Select File</label>
-			<input type="file" class="form-control" (change)="onFileChange($event)" />
-			<div *ngIf="selectedFile" class="form-text mt-1">
-				Selected: {{ selectedFile.name }}
+	<!-- Uploaded Documents Card -->
+	<div class="col-md-6">
+		<div class="card shadow-sm p-4 h-100">
+			<h5 class="card-title mb-3">Uploaded Documents</h5>
+			<div class="mb-4">
+				<label class="form-label">Search by Name</label>
+				<input type="text" class="form-control" [value]="search()"
+					(input)="search.set($any($event.target).value)" />
+			</div>
+			<div class="table-responsive">
+				<table class="table table-bordered align-middle mb-0">
+					<thead class="table-light">
+						<tr>
+							<th>#</th>
+							<th>Name</th>
+							<th>Date Added</th>
+							<th>Actions</th>
+						</tr>
+					</thead>
+					<tbody>
+						<tr *ngFor="let doc of filteredDocs; let i = index">
+							<td>{{ i + 1 }}</td>
+							<td>{{ doc.name }}</td>
+							<td>{{ formatDate(doc.dateAdded) }}</td>
+							<td class="d-flex gap-2">
+								<button class="btn btn-sm btn-outline-success" [disabled]="doc.isIndexed"
+									[ngClass]="{ 'opacity-50': doc.isIndexed }"
+									(click)="!doc.isIndexed && indexDoc(doc.id)">
+									{{ doc.isIndexed ? 'Indexed' : 'Index' }}
+								</button>
+								<button class="btn btn-sm btn-outline-danger" (click)="delete(doc.id)">
+									Delete
+								</button>
+							</td>
+						</tr>
+					</tbody>
+				</table>
+			</div>
+			<div *ngIf="!filteredDocs.length" class="text-center text-muted mt-4">
+				No matching documents found.
 			</div>
 		</div>
-
-		<!-- Upload Button -->
-		<div class="col-12">
-			<button type="submit" class="btn btn-primary w-100"
-				[disabled]="uploading() || !uploadForm.valid || !selectedFile">
-				{{ uploading() ? 'Uploading...' : 'Upload' }}
-			</button>
-		</div>
-	</form>
-</div>
-
-<!-- Uploaded Documents Card -->
-<div class="card shadow-sm p-4">
-	<h5 class="card-title mb-3">Uploaded Documents</h5>
-
-	<div class="mb-4">
-		<label class="form-label">Search by Name</label>
-		<input type="text" class="form-control" [value]="search()" (input)="search.set($any($event.target).value)" />
 	</div>
 
-	<div class="table-responsive">
-		<table class="table table-bordered align-middle mb-0">
-			<thead class="table-light">
-				<tr>
-					<th>#</th>
-					<th>Name</th>
-					<th>Date Added</th>
-					<th>Actions</th>
-				</tr>
-			</thead>
-			<tbody>
-				<tr *ngFor="let doc of filteredDocs; let i = index">
-					<td>{{ i + 1 }}</td>
-					<td>{{ doc.name }}</td>
-					<td>{{ formatDate(doc.dateAdded) }}</td>
-					<td class="d-flex gap-2">
-						<button class="btn btn-sm btn-outline-success" [disabled]="doc.isIndexed"
-							[ngClass]="{ 'opacity-50': doc.isIndexed }" (click)="!doc.isIndexed && indexDoc(doc.id)">
-							{{ doc.isIndexed ? 'Indexed' : 'Index' }}
-						</button>
-
-						<button class="btn btn-sm btn-outline-danger" (click)="delete(doc.id)">
-							Delete
-						</button>
-					</td>
-				</tr>
-			</tbody>
-		</table>
-
-	</div>
-
-	<div *ngIf="!filteredDocs.length" class="text-center text-muted mt-4">
-		No matching documents found.
-	</div>
 </div>

@@ -1,0 +1,58 @@
+<div class="row g-4 h-100">
+	<div class="col-12 d-flex flex-column" style="height: 100vh;">
+		<div class="card shadow-sm p-3 flex-grow-1 d-flex flex-column">
+			<div #chatWindow class="flex-grow-1 overflow-auto px-3">
+				<div *ngFor="let msg of messages" class="mb-4" [ngClass]="{ 'ms-auto': msg.role === 'user' }">
+					<div class="d-flex align-items-end mb-2" [ngClass]="{ 'flex-row-reverse': msg.role==='user' }">
+						<div class="flex-shrink-0 pe-2 ps-2">
+							<img src="https://i.pinimg.com/originals/0c/67/5a/0c675a8e1061478d2b7b21b330093444.gif"
+								width="40" class="rounded-circle" alt="avatar">
+						</div>
+						<div [innerHTML]="formatMessage(msg.content)"
+							[ngClass]="msg.role==='user' ? 'message-box-end bg-primary text-white' : 'message-box-start bg-light text-dark'">
+						</div>
+					</div>
+					<div class="fs-xs text-body-secondary text-end">Just now</div>
+				</div>
+				<div *ngIf="loading" class="text-muted">Assistant is typing...</div>
+			</div>
+			<!-- <div *ngIf="matches.length" class="mt-2 px-3">
+				<div class="fw-semibold">Referenced Documents:</div>
+				<ul class="list-group list-group-flush">
+					<li *ngFor="let m of matches" class="list-group-item">
+						<div>{{ m.doc_name }}</div>
+						<div class="text-truncate small">{{ m.text }}</div>
+						<a [href]="m.link" target="_blank" class="small">View Document</a>
+					</li>
+				</ul>
+			</div> -->
+			<div *ngIf="matches.length" class="mt-2 px-3">
+				<div class="fw-semibold mb-2">Referenced Documents:</div>
+				<div class="d-flex flex-wrap gap-2">
+					<div *ngFor="let m of matches"
+						class="badge bg-light border text-dark d-flex align-items-center p-2">
+						<span class="me-2 fw-semibold">{{ m.doc_name }}</span>
+						<span class="text-muted small ms-1">Score: {{ m.score }}</span>
+						<a [href]="m.link" target="_blank" class="btn btn-sm btn-outline-primary ms-auto">
+							<i class="bi bi-download"></i>
+						</a>
+					</div>
+
+					<!-- <div *ngFor="let m of matches"
+						class="badge bg-light border text-dark d-flex align-items-center p-2">
+						<span class="me-2">{{ m.doc_name }}</span>
+						<a [href]="m.link" target="_blank" class="btn btn-sm btn-outline-primary ms-auto">
+							<i class="bi bi-download"></i> Download
+						</a>
+					</div> -->
+				</div>
+			</div>
+
+			<form class="d-flex gap-2 mt-3 pt-2 border-top" (ngSubmit)="sendMessage()">
+				<input type="text" class="form-control" [(ngModel)]="query" name="chatQuery"
+					placeholder="Type your message..." [disabled]="loading">
+				<button type="submit" class="btn btn-primary" [disabled]="loading || !query.trim()">Send</button>
+			</form>
+		</div>
+	</div>
+</div>
