@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 from fastapi.responses import FileResponse, JSONResponse
 from pathlib import Path
 
-from api import document,indexing,chat,chat_session
+from api import chat_session_local, document,indexing,chat,chat_session, indexing_local
 
 load_dotenv()
 
@@ -43,10 +43,17 @@ async def auth_middleware(request: Request, call_next):
     return await call_next(request)
 
 
+
+if os.getenv("MODEL", "openai").lower() == "openai":
+    #app.include_router(indexing.router, prefix="/api/indexing")
+    app.include_router(indexing.router, prefix="/api/indexing")
+    app.include_router(chat_session.router, prefix="/api/chat_session")
+else:
+    app.include_router(indexing_local.router, prefix="/api/indexing")
+    app.include_router(chat_session_local.router, prefix="/api/chat_session")
+
 app.include_router(document.router, prefix="/api/document")
-app.include_router(indexing.router, prefix="/api/indexing")
 app.include_router(chat.router, prefix="/api/chat")
-app.include_router(chat_session.router, prefix="/api/chat_session")
 
 app.add_middleware(
     CORSMiddleware,
