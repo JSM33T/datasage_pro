@@ -11,6 +11,7 @@ from pathlib import Path
 
 from api import chat_session_local, document,chat, indexing_local
 
+
 app = FastAPI()
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -58,7 +59,6 @@ app.include_router(chat_session_local.router, prefix="/api/chat_session")
 
 app.include_router(document.router, prefix="/api/document")
 app.include_router(chat.router, prefix="/api/chat")
-print(app.routes)
 
 # app.add_middleware(
 #     CORSMiddleware,

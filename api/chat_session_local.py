@@ -1,6 +1,8 @@
+
+from dotenv import load_dotenv
+load_dotenv()
 from fastapi import APIRouter, Body
 from fastapi.responses import JSONResponse
-from dotenv import load_dotenv
 from pymongo import MongoClient
 from pathlib import Path
 from datetime import datetime
@@ -14,7 +16,7 @@ import json
 from sentence_transformers import SentenceTransformer
 
 # === Setup ===
-load_dotenv()
+
 router = APIRouter()
 
 RESOURCE_DIR = Path("./resources")
@@ -23,23 +25,9 @@ db = client[os.getenv("MONGO_DB")]  # type: ignore
 sessions = db["chat_sessions"]
 model = SentenceTransformer("all-MiniLM-L6-v2")
 
-# === Ollama Chat (non-stream) ===
-# def call_ollama(messages: list, model="llama3.2:3b"):
-#     url = "http://192.168.137.252:11434/api/chat"
-#     headers = {"Content-Type": "application/json"}
-#     payload = {
-#         "model": model,
-#         "messages": messages,
-#         "stream": False
-#     }
-
-#     response = requests.post(url, headers=headers, json=payload)
-#     response.raise_for_status()
-#     data = response.json()
-#     return data.get("message", {}).get("content", "").strip()
-
-def call_ollama(messages: list, model="llama3:8b"):
-    url = "http://192.168.137.252:11434/api/chat"
+def call_ollama(messages: list, model="gemma:2b"):
+    # url = "http://192.168.137.252:11434/api/chat"
+    url = "http://localhost:11434/api/chat"
     headers = {"Content-Type": "application/json"}
     payload = {
         "model": model,
@@ -211,7 +199,7 @@ def continue_chat(data: dict = Body(...)):
     context_text, _ = retrieve_context_from_faiss(fresh_doc_ids, query)
 
     prompt_messages = [
-        {"role": "system", "content": "You are a helpful assistant. Use the following documents to answer accurately and precisely:\n\n" + context_text},
+        {"role": "system", "content": "You are a helpful assistant. Use the following documents to answer accurately and precisely in shortest message possible:\n\n" + context_text},
         *messages
     ]
 
@@ -287,7 +275,8 @@ def continue_chat_all_docs(data: dict = Body(...)):
 
     matched_docs = []
     for doc_id, score in sorted(doc_score.items(), key=lambda x: x[1], reverse=True):
-        meta_file = RESOURCE_DIR / doc_id / f"{doc_id}.pkl"
+        # meta_file = RESOURCE_DIR / doc_id / f"{doc_id}.pkl"
+        meta_file = RESOURCE_DIR / f"{doc_id}.pkl"
         try:
             with open(meta_file, "rb") as f:
                 meta = pickle.load(f)
