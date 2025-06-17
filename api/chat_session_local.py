@@ -18,14 +18,14 @@ from sentence_transformers import SentenceTransformer
 # === Setup ===
 
 router = APIRouter()
-
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "gemma:2b")
 RESOURCE_DIR = Path("./resources")
 client = MongoClient(os.getenv("MONGO_URI"))
 db = client[os.getenv("MONGO_DB")]  # type: ignore
 sessions = db["chat_sessions"]
 model = SentenceTransformer("all-MiniLM-L6-v2")
 
-def call_ollama(messages: list, model="gemma:2b"):
+def call_ollama(messages: list, model=OLLAMA_MODEL):
     # url = "http://192.168.137.252:11434/api/chat"
     url = "http://localhost:11434/api/chat"
     headers = {"Content-Type": "application/json"}
