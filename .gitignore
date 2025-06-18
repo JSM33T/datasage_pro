@@ -4,3 +4,4 @@ __pycache__/
 **/__pycache__/
 resources
 da_env/
+static/
