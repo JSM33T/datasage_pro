@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from pathlib import Path
 
-from api import chat_session_local, document,chat, indexing_local
+from api import chat_session, chat_session_local, document,chat, indexing, indexing_local
 
 app = FastAPI()
 
@@ -44,29 +44,17 @@ async def auth_middleware(request: Request, call_next):
 
 
 
-# if os.getenv("MODEL", "openai").lower() == "openai":
-#     #app.include_router(indexing.router, prefix="/api/indexing")
-#     app.include_router(indexing.router, prefix="/api/indexing")
-#     app.include_router(chat_session.router, prefix="/api/chat_session")
-# else:
-#     app.include_router(indexing_local.router, prefix="/api/indexing")
-#     app.include_router(chat_session_local.router, prefix="/api/chat_session")
-
-
-app.include_router(indexing_local.router, prefix="/api/indexing")
-app.include_router(chat_session_local.router, prefix="/api/chat_session")
+if os.getenv("MODEL", "openai").lower() == "openai":
+    #app.include_router(indexing.router, prefix="/api/indexing")
+    app.include_router(indexing.router, prefix="/api/indexing")
+    app.include_router(chat_session.router, prefix="/api/chat_session")
+else:
+    app.include_router(indexing_local.router, prefix="/api/indexing")
+    app.include_router(chat_session_local.router, prefix="/api/chat_session")
 
 app.include_router(document.router, prefix="/api/document")
 app.include_router(chat.router, prefix="/api/chat")
-print(app.routes)
-
-# app.add_middleware(
-#     CORSMiddleware,
-#     allow_origins=["*"],
-#     allow_credentials=True,
-#     allow_methods=["*"],
-#     allow_headers=["*"],
-# )
+print("started")
 
 app.add_middleware(
     CORSMiddleware,
