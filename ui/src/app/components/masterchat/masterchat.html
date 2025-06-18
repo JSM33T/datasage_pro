@@ -25,7 +25,7 @@
 							class="badge bg-light border text-dark d-flex align-items-center p-2">
 							<span class="me-2 fw-semibold">{{ m.doc_name }}</span>
 							<span class="text-muted small ms-1">Score: {{ m.score }}</span>
-							<a [href]="'http://localhost:8000' + m.link" target="_blank"
+							<a [href]="docUrl + m.link" target="_blank"
 								class="btn btn-sm btn-outline-primary ms-auto">
 								<i class="bi bi-download"></i>
 							</a>

@@ -122,6 +122,8 @@ export class Masterchat implements AfterViewChecked {
 	query = '';
 	loading = false;
 	sessionId: string | null = null;
+	docUrl = environment.docBase;
+	apiUrl = environment.apiBase;
 	matches: { doc_id: string; doc_name: string; text: string; link: string; score: number }[] = [];
 
 	constructor(private http: HttpClient) { }
