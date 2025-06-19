@@ -1,4 +1,3 @@
-
 from dotenv import load_dotenv
 load_dotenv()
 from fastapi import APIRouter, Body
@@ -12,47 +11,58 @@ import os
 import faiss
 import pickle
 import numpy as np
-import json
 from sentence_transformers import SentenceTransformer
 
-# === Setup ===
-
 router = APIRouter()
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "gemma:2b")
+OLLAMA_MODEL = "phi3:latest"
 RESOURCE_DIR = Path("./resources")
 client = MongoClient(os.getenv("MONGO_URI"))
-db = client[os.getenv("MONGO_DB")]  # type: ignore
+db = client[os.getenv("MONGO_DB")]
 sessions = db["chat_sessions"]
 model = SentenceTransformer("all-MiniLM-L6-v2")
+EMBEDDING_MODEL_NAME = "all-MiniLM-L6-v2"
 
 def call_ollama(messages: list, model=OLLAMA_MODEL):
-    # url = "http://192.168.137.252:11434/api/chat"
-    url = "http://localhost:11434/api/chat"
     headers = {"Content-Type": "application/json"}
-    payload = {
-        "model": model,
-        "messages": messages,
-        "stream": False
-    }
+
+    # Convert messages to prompt
+    prompt = "\n".join([f"{m['role']}: {m['content']}" for m in messages])
+
+    # Choose endpoint based on model type
+    if any(x in model for x in [":chat", ":instruct", "chat", "instruct"]):
+        url = "http://localhost:11434/api/chat"
+        payload = {
+            "model": model,
+            "messages": messages,
+            "stream": False
+        }
+    else:
+        url = "http://localhost:11434/api/generate"
+        payload = {
+            "model": model,
+            "prompt": prompt,
+            "stream": False
+        }
 
     try:
         response = requests.post(url, headers=headers, json=payload)
         response.raise_for_status()
         data = response.json()
+        print("OLLAMA RAW RESPONSE:", data)  # debug log
 
-        # log response if empty
-        if "message" not in data:
-            print(" Ollama response missing 'message':", data)
-            return "[No reply returned from Ollama]"
-
-        return data["message"].get("content", "").strip()
-
+        return (
+            data.get("response") or
+            data.get("message", {}).get("content", "") or
+            "[Empty response]"
+        ).strip()
     except Exception as e:
         print("Ollama request failed:", e)
         return "[Ollama error: could not generate response]"
 
 
-# === Routes ===
+
+# The rest of the code remains unchanged
+
 @router.get("/get_session/{session_id}")
 def get_session(session_id: str):
     chat = sessions.find_one({"_id": session_id})
@@ -78,7 +88,6 @@ def resolve_docs(data: dict = Body(...)):
 def list_sessions():
     all_sessions = sessions.find({}, {"_id": 1, "doc_ids": 1, "createdAt": 1})
     documents = db["documents"]
-
     enriched_sessions = []
     for s in all_sessions:
         doc_ids = s.get("doc_ids", [])
@@ -86,16 +95,13 @@ def list_sessions():
             {"_id": {"$in": doc_ids}},
             {"_id": 1, "name": 1, "filename": 1}
         ))
-
         enriched_sessions.append({
             "id": s["_id"],
             "createdAt": s.get("createdAt"),
             "documents": doc_meta
         })
-
     return enriched_sessions
 
-# === Embedding helper ===
 def get_embedding(text: str):
     embedding = model.encode(text, convert_to_numpy=True)
     return np.array([embedding], dtype="float32")
@@ -114,18 +120,19 @@ def retrieve_context_from_faiss(doc_ids, query, top_k=5):
         if not faiss_path.exists() or not pkl_path.exists():
             continue
 
-        index = faiss.read_index(str(faiss_path))
-
-        # ❗ Skip mismatched dimensions
-        if index.d != query_vec.shape[1]:
-            print(f"⚠️ Skipping {doc_id}: index.d={index.d} != query_vec.shape[1]={query_vec.shape[1]}")
-            continue
-
         with open(pkl_path, "rb") as f:
             meta = pickle.load(f)
+            if meta.get("embedding_model") != EMBEDDING_MODEL_NAME:
+                print(f"⚠️ Skipping {doc_id}: embedding_model mismatch ({meta.get('embedding_model')} != {EMBEDDING_MODEL_NAME})")
+                continue
             text_chunks = meta.get("text", [])
             if isinstance(text_chunks, str):
                 text_chunks = [text_chunks]
+
+        index = faiss.read_index(str(faiss_path))
+        if index.d != query_vec.shape[1]:
+            print(f"⚠️ Skipping {doc_id}: index.d={index.d} != query_vec.shape[1]={query_vec.shape[1]}")
+            continue
 
         for chunk in text_chunks:
             all_text_chunks.append(chunk)
@@ -140,10 +147,8 @@ def retrieve_context_from_faiss(doc_ids, query, top_k=5):
         return "No relevant document content found.", {}
 
     D, I = combined_index.search(query_vec, top_k)
-
     matched_chunks = []
     doc_score = {}
-
     for idx in I[0]:
         if 0 <= idx < len(all_text_chunks):
             matched_chunks.append(all_text_chunks[idx])
@@ -194,9 +199,8 @@ def continue_chat(data: dict = Body(...)):
 
     messages = chat["messages"]
     messages.append({"role": "user", "content": query})
-
-    fresh_doc_ids = chat.get("doc_ids", [])
-    context_text, _ = retrieve_context_from_faiss(fresh_doc_ids, query)
+    doc_ids = chat.get("doc_ids", [])
+    context_text, _ = retrieve_context_from_faiss(doc_ids, query)
 
     prompt_messages = [
         {"role": "system", "content": "You are a helpful assistant. Use the following documents to answer accurately and precisely in shortest message possible:\n\n" + context_text},
@@ -206,12 +210,11 @@ def continue_chat(data: dict = Body(...)):
     reply = call_ollama(prompt_messages)
     messages.append({"role": "assistant", "content": reply})
     sessions.update_one({"_id": session_id}, {"$set": {"messages": messages}})
-
     return {"reply": reply, "messages": messages}
+
 @router.post("/start2")
 def start_chat_all_docs():
     session_id = str(uuid4())
-
     doc_ids = []
     doc_meta = []
     for path in RESOURCE_DIR.iterdir():
@@ -260,7 +263,6 @@ def continue_chat_all_docs(data: dict = Body(...)):
 
     messages = chat["messages"]
     messages.append({"role": "user", "content": query})
-
     doc_ids = chat.get("doc_ids", [])
     context_text, doc_score = retrieve_context_from_faiss(doc_ids, query)
 
@@ -275,7 +277,6 @@ def continue_chat_all_docs(data: dict = Body(...)):
 
     matched_docs = []
     for doc_id, score in sorted(doc_score.items(), key=lambda x: x[1], reverse=True):
-        # meta_file = RESOURCE_DIR / doc_id / f"{doc_id}.pkl"
         meta_file = RESOURCE_DIR / f"{doc_id}.pkl"
         try:
             with open(meta_file, "rb") as f:
