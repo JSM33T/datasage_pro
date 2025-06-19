@@ -5,3 +5,4 @@ __pycache__/
 resources
 da_env/
 static/
+venv
