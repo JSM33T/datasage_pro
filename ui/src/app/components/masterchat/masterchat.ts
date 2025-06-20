@@ -120,6 +120,7 @@ export class Masterchat implements AfterViewChecked {
 	@ViewChild('messageInput') messageInputRef!: ElementRef;
 	messages: { role: string; content: string }[] = [];
 	query = '';
+	private lastMessageCount = 0;
 	loading = false;
 	sessionId: string | null = null;
 	docUrl = environment.docBase;
@@ -129,24 +130,17 @@ export class Masterchat implements AfterViewChecked {
 	constructor(private http: HttpClient) { }
 
 	ngAfterViewChecked(): void {
-		this.scrollToBottom();
+		if (this.lastMessageCount !== this.messages.length) {
+			this.scrollToBottom();
+			this.lastMessageCount = this.messages.length;
+		}
 	}
-
-	private scrollToBottom2(): void {
+	private scrollToBottom(): void {
 		try {
 			this.chatWindowRef.nativeElement.scrollTop = this.chatWindowRef.nativeElement.scrollHeight;
+			this.messageInputRef.nativeElement.focus();
 		} catch { }
 	}
-private scrollToBottom(): void {
-	try {
-		this.chatWindowRef.nativeElement.scrollTo({
-			top: this.chatWindowRef.nativeElement.scrollHeight,
-			behavior: 'smooth'
-		});
-		this.messageInputRef.nativeElement.focus();
-	} catch {}
-}
-
 
 
 	formatMessage(text: string): string {
