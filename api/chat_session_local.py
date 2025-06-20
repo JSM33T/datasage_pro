@@ -14,7 +14,7 @@ import numpy as np
 from sentence_transformers import SentenceTransformer
 
 router = APIRouter()
-OLLAMA_MODEL = "phi3:latest"
+OLLAMA_MODEL = "llama3:8b"
 RESOURCE_DIR = Path("./resources")
 client = MongoClient(os.getenv("MONGO_URI"))
 db = client[os.getenv("MONGO_DB")]
