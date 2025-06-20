@@ -273,6 +273,58 @@ def continue_chat_all_docs(data: dict = Body(...)):
     messages.append({"role": "assistant", "content": reply})
     sessions.update_one({"_id": session_id}, {"$set": {"messages": messages}})
 
+    # Fetch document metadata from MongoDB
+    documents = db["documents"]
+    docs_cursor = documents.find(
+        { "_id": { "$in": list(doc_score.keys()) } },
+        { "_id": 1, "name": 1, "filename": 1 }
+    )
+    doc_map = { str(d["_id"]): d for d in docs_cursor }
+
+    matched_docs = [
+        {
+            "doc_id": str(doc_id),
+            "doc_name": doc_map.get(str(doc_id), {}).get("name", "N/A"),
+            "link": f"/resources/{doc_id}/{doc_map.get(str(doc_id), {}).get('filename', '')}",
+            "score": score
+        }
+        for doc_id, score in sorted(doc_score.items(), key=lambda x: x[1], reverse=True)
+        if str(doc_id) in doc_map
+    ]
+
+    return {
+        "reply": reply,
+        "messages": messages,
+        "matched_docs": matched_docs
+    }
+
+
+@router.post("/continue2BAK")
+def continue_chat_all_docs(data: dict = Body(...)):
+    session_id = data.get("session_id")
+    query = data.get("query")
+    if not session_id or not query:
+        return JSONResponse(status_code=400, content={"error": "session_id and query required"})
+
+    chat = sessions.find_one({"_id": session_id})
+    if not chat:
+        return JSONResponse(status_code=404, content={"error": "Session not found"})
+
+    messages = chat["messages"]
+    messages.append({"role": "user", "content": query})
+
+    doc_ids = chat.get("doc_ids", [])
+    context_text, doc_score = retrieve_context_from_faiss(doc_ids, query)
+
+    prompt_messages = [
+        {"role": "system", "content": "You are a helpful assistant. Use the following documents to answer accurately and precisely. Prefer bullet points:\n\n" + context_text},
+        *messages
+    ]
+
+    reply = call_ollama(prompt_messages)
+    messages.append({"role": "assistant", "content": reply})
+    sessions.update_one({"_id": session_id}, {"$set": {"messages": messages}})
+
     matched_docs = []
     for doc_id, score in sorted(doc_score.items(), key=lambda x: x[1], reverse=True):
         # meta_file = RESOURCE_DIR / doc_id / f"{doc_id}.pkl"
