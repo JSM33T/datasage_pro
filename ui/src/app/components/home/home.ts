@@ -8,4 +8,6 @@ import { RouterLink } from '@angular/router';
 	imports: [CommonModule, RouterLink],
 	templateUrl: './home.html'
 })
-export class Home { }
+export class Home {
+	role = localStorage.getItem('role') || 'user';
+}

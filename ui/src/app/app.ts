@@ -14,6 +14,7 @@ import { Collapse } from 'bootstrap';
 export class App {
 	token = signal(localStorage.getItem('token'));
 	password = signal('');
+	role = signal(localStorage.getItem('role') || 'user');
 	loading = signal(false);
 	error = signal('');
 
@@ -37,24 +38,19 @@ export class App {
 	login() {
 		this.loading.set(true);
 		this.error.set('');
-		const token = this.password();
 
 		this.http
-			.post(
-				`${environment.apiBase}/auth/login`,
-				{ password: token },
-				{
-					headers: {
-						Authorization: token
-					}
-				}
-			)
+			.post<any>(`${environment.apiBase}/auth/login`, { password: this.password() })
 			.subscribe({
-				next: () => {
-					localStorage.setItem('token', token);
-					this.token.set(token);
-					location.reload();
+				next: (response) => {
+					localStorage.setItem('token', response.token);
+					localStorage.setItem('role', response.role);
 
+					this.token.set(response.token);
+					this.role.set(response.role);
+
+					this.loading.set(false);
+					location.reload();
 				},
 				error: (err) => {
 					this.loading.set(false);
@@ -62,6 +58,8 @@ export class App {
 				},
 			});
 	}
+
+
 	logout() {
 		localStorage.removeItem('token');
 		this.token.set(null);
