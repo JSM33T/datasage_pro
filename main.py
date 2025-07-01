@@ -40,7 +40,7 @@ async def auth_middleware(request: Request, call_next):
             return JSONResponse(status_code=401, content={"detail": "Invalid or missing Authorization token"})
     return await call_next(request)
 
-# Router setup based on model
+#Router setup based on model
 # if os.getenv("MODEL", "openai").lower() == "openai":
 #     app.include_router(indexing.router, prefix="/api/indexing")
 #     app.include_router(chat_session.router, prefix="/api/chat_session")
@@ -49,8 +49,8 @@ async def auth_middleware(request: Request, call_next):
 #     app.include_router(chat_session_local.router, prefix="/api/chat_session")
 
 
-app.include_router(indexing_local.router, prefix="/api/indexing")
-app.include_router(chat_session_local.router, prefix="/api/chat_session")
+app.include_router(indexing.router, prefix="/api/indexing")
+app.include_router(chat_session.router, prefix="/api/chat_session")
 
 app.include_router(document.router, prefix="/api/document")
 app.include_router(chat.router, prefix="/api/chat")

@@ -44,7 +44,10 @@ def call_ollama(messages: list, model=OLLAMA_MODEL):
             "stream": False
         }
 
-    try:
+    try:	
+        print("=======================MODEL=======================")
+        print(model);
+        print("=======================MODEL=======================")
         response = requests.post(url, headers=headers, json=payload)
         response.raise_for_status()
         data = response.json()

@@ -12,7 +12,7 @@ import pickle
 import numpy as np
 
 # === Setup ===
-load_dotenv()
+load_dotenv(override=True)  # force reload
 router = APIRouter()
 
 RESOURCE_DIR = Path("./resources")
@@ -23,6 +23,9 @@ openai_client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 @router.get("/get_session/{session_id}")
 def get_session(session_id: str):
+    print("========================================");
+    print(openai_client.api_key);
+    print("========================================");
     chat = sessions.find_one({ "_id": session_id })
     if not chat:
         return JSONResponse(status_code=404, content={"error": "Session not found"})
