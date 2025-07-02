@@ -277,8 +277,6 @@ def continue_chat_all_docs(data: dict = Body(...)):
         "matched_docs": matched_docs
     }
 
-
-
 def retrieve_context_from_faiss(doc_ids, query, top_k=5):
     combined_index = None
     all_text_chunks = []
@@ -309,7 +307,7 @@ def retrieve_context_from_faiss(doc_ids, query, top_k=5):
             combined_index.merge_from(index)
 
     if combined_index is None or not all_text_chunks:
-        return "No relevant document content found.", []
+        return "No relevant document content found.", {}
 
     query_vec = get_embedding(query)
     D, I = combined_index.search(query_vec, top_k)
@@ -317,59 +315,12 @@ def retrieve_context_from_faiss(doc_ids, query, top_k=5):
     matched_chunks = []
     doc_score = {}
 
-    for idx in I[0]:
+    for i, idx in enumerate(I[0]):
         if 0 <= idx < len(all_text_chunks):
             matched_chunks.append(all_text_chunks[idx])
             doc_id = chunk_doc_map[idx]
-            doc_score[doc_id] = doc_score.get(doc_id, 0) + 1
-
-    # Sort doc_ids by relevance (more chunk matches = higher)
-    ranked_doc_ids = sorted(doc_score, key=doc_score.get, reverse=True) # type: ignore
+            distance = float(D[0][i])  # ensure native float
+            score = float(1 / (distance + 1e-6))  # convert to float
+            doc_score[doc_id] = doc_score.get(doc_id, 0.0) + score
 
     return "\n\n".join(matched_chunks), doc_score
-
-
-
-def retrieve_context_from_faiss2(doc_ids, query, top_k=3):
-    combined_index = None
-    all_text_chunks = []
-    chunk_doc_map = []
-
-    for doc_id in doc_ids:
-        doc_dir = RESOURCE_DIR / doc_id
-        faiss_path = doc_dir / f"{doc_id}.faiss"
-        pkl_path = doc_dir / f"{doc_id}.pkl"
-
-        if not faiss_path.exists() or not pkl_path.exists():
-            continue
-
-        index = faiss.read_index(str(faiss_path))
-        with open(pkl_path, "rb") as f:
-            meta = pickle.load(f)
-            text_chunks = meta.get("text", [])
-            if isinstance(text_chunks, str):
-                text_chunks = [text_chunks]
-
-        for chunk in text_chunks:
-            all_text_chunks.append(chunk)
-            chunk_doc_map.append(doc_id)
-
-        if combined_index is None:
-            combined_index = index
-        else:
-            combined_index.merge_from(index)
-
-    if combined_index is None or not all_text_chunks:
-        return "No relevant document content found.", []
-
-    query_vec = get_embedding(query)
-    D, I = combined_index.search(query_vec, top_k)
-
-    matched_chunks = []
-    matched_doc_ids = set()
-    for idx in I[0]:
-        if 0 <= idx < len(all_text_chunks):
-            matched_chunks.append(all_text_chunks[idx])
-            matched_doc_ids.add(chunk_doc_map[idx])
-
-    return "\n\n".join(matched_chunks), list(matched_doc_ids)

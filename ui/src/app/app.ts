@@ -18,7 +18,11 @@ export class App {
 	loading = signal(false);
 	error = signal('');
 
-	constructor(private http: HttpClient, private router: Router) { }
+	constructor(private http: HttpClient, private router: Router) {
+		if (!localStorage.getItem('token')) {
+			this.router.navigateByUrl('/');
+		}
+	}
 
 	ngAfterViewInit(): void {
 		this.router.events.subscribe((event) => {
@@ -33,6 +37,7 @@ export class App {
 
 	confirmLogout() {
 		localStorage.removeItem('token');
+		this.router.navigateByUrl('/');
 		location.reload();
 	}
 	login() {
@@ -63,7 +68,7 @@ export class App {
 	logout() {
 		localStorage.removeItem('token');
 		this.token.set(null);
-		location.reload();
+		window.location.href = '/';
 	}
 
 }

@@ -62,7 +62,11 @@ async def index_document(data: dict = Body(...)):
                 continue
 
             # Get embedding
-            embedding = np.array([get_embedding(text)], dtype="float32")
+            #embedding = np.array([get_embedding(text)], dtype="float32")
+            chunks = chunk_text(text)
+            embeddings = [get_embedding(chunk) for chunk in chunks]
+            embedding = np.array(embeddings, dtype="float32")
+            
             dim = embedding.shape[1]
             index = faiss.IndexFlatL2(dim)
             index.add(embedding) # type: ignore
@@ -80,3 +84,21 @@ async def index_document(data: dict = Body(...)):
             results.append({"id": doc_id, "status": f"error: {str(e)}"})
 
     return {"results": results}
+
+
+def chunk_text(text, max_tokens=1000):
+    sentences = text.split(". ")
+    chunks = []
+    current_chunk = ""
+
+    for sentence in sentences:
+        if len(current_chunk.split()) + len(sentence.split()) < max_tokens:
+            current_chunk += sentence + ". "
+        else:
+            chunks.append(current_chunk.strip())
+            current_chunk = sentence + ". "
+
+    if current_chunk:
+        chunks.append(current_chunk.strip())
+
+    return chunks
