@@ -215,8 +215,86 @@ def start_chat_all_docs():
         }
     }
 
-
 @router.post("/continue2")
+def continue_chat_all_docs(data: dict = Body(...)):
+    from tiktoken import encoding_for_model
+
+    def count_tokens(text, model="gpt-3.5-turbo"):
+        enc = encoding_for_model(model)
+        return len(enc.encode(text))
+
+    session_id = data.get("session_id")
+    query = data.get("query")
+    if not session_id or not query:
+        return JSONResponse(status_code=400, content={"error": "session_id and query required"})
+
+    chat = sessions.find_one({ "_id": session_id })
+    if not chat:
+        return JSONResponse(status_code=404, content={"error": "Session not found"})
+
+    messages = chat["messages"]
+    messages.append({ "role": "user", "content": query })
+
+    all_doc_ids = [doc["_id"] for doc in db["documents"].find({}, { "_id": 1 })]
+    
+    # === Retrieve context ===
+    context_text, doc_score = retrieve_context_from_faiss(all_doc_ids, query)
+
+    # === Token count trimming for context_text ===
+    MAX_CONTEXT_TOKENS = 3000
+    context_tokens = count_tokens(context_text)
+    if context_tokens > MAX_CONTEXT_TOKENS:
+        context_text = ' '.join(context_text.split()[:MAX_CONTEXT_TOKENS])
+
+    # === Limit message history ===
+    MAX_MESSAGES = 10
+    messages = messages[-MAX_MESSAGES:]
+
+    # === Call GPT ===
+    gpt_response = openai_client.chat.completions.create(
+        model=os.getenv("OPENAI_MODEL", "gpt-3.5-turbo"),
+        messages=[
+            {
+                "role": "system",
+                "content": "You are a helpful assistant. Use the following documents to answer accurately and precisely without beating around the bush:\n\n" + context_text
+            },
+            *messages
+        ]
+    )
+
+    reply = gpt_response.choices[0].message.content.strip()  # type: ignore
+    messages.append({ "role": "assistant", "content": reply })
+
+    sessions.update_one({ "_id": session_id }, { "$set": { "messages": messages } })
+
+    # === Sort docs by relevance score ===
+    sorted_docs = sorted(doc_score.items(), key=lambda x: x[1], reverse=True)
+    top_doc_ids = [doc_id for doc_id, _ in sorted_docs]
+
+    docs_cursor = db["documents"].find(
+        { "_id": { "$in": top_doc_ids } },
+        { "_id": 1, "name": 1, "filename": 1 }
+    )
+    doc_map = { str(d["_id"]): d for d in docs_cursor }
+
+    matched_docs = [
+        {
+            "doc_id": str(doc_id),
+            "doc_name": doc_map.get(str(doc_id), {}).get("name", ""),
+            "link": f"/resources/{doc_id}/{doc_map.get(str(doc_id), {}).get('filename', '')}",
+            "score": doc_score[doc_id]
+        }
+        for doc_id in top_doc_ids if str(doc_id) in doc_map
+    ]
+
+    return {
+        "reply": reply,
+        "messages": messages,
+        "matched_docs": matched_docs
+    }
+
+
+@router.post("/continue3")
 def continue_chat_all_docs(data: dict = Body(...)):
     session_id = data.get("session_id")
     query = data.get("query")
