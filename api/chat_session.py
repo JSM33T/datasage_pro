@@ -256,7 +256,7 @@ def continue_chat_all_docs(data: dict = Body(...)):
         messages=[
             {
                 "role": "system",
-                "content": "You are a helpful assistant. Use the following documents to answer accurately and precisely without beating around the bush:\n\n" + context_text
+                "content": "You are a helpful document context assistant. Use the following documents to answer accurately and precisely. Avoid unnecessary explanations or unrelated information::\n\n" + context_text
             },
             *messages
         ]
@@ -318,7 +318,7 @@ def continue_chat_all_docs(data: dict = Body(...)):
         messages=[
             {
                 "role": "system",
-                "content": "You are a helpful assistant. Use the following documents to answer accurately and precisely without beating around the bush:\n\n" + context_text
+                "content": "You are a helpful assistant. Use the following documents to answer accurately and precisely wihtout diverting from the context:\n\n" + context_text
             },
             *messages
         ]
