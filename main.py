@@ -41,6 +41,9 @@ async def auth_middleware(request: Request, call_next):
     admin_token = os.getenv("ADMIN_TOKEN")
     user_token = os.getenv("USER_TOKEN")
 
+    if path.startswith("/resources") or path.startswith("/static"):
+        return await call_next(request)
+    
     if path.startswith("/api") and not path.startswith("/api/auth/login"):
         # Admin-only routes
         if path.startswith("/api/indexing") or path.startswith("/api/document"):

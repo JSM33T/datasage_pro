@@ -30,37 +30,6 @@ collection.create_index([
     ("generatedSummary", "text")
 ], name="DocumentTextIndex", default_language='english')
 
-# @router.get("/search")
-# def search_documents(query: str = Query(..., min_length=1)):
-#     # Case-insensitive regex search in name or filename first
-#     primary_results = list(collection.find(
-#         {
-#             "isIndexed": True,
-#             "$or": [
-#                 {"name": {"$regex": re.escape(query), "$options": "i"}},
-#                 {"filename": {"$regex": re.escape(query), "$options": "i"}}
-#             ]
-#         },
-#         {"_id": 1, "name": 1, "filename": 1, "isIndexed": 1, "description": 1, "generatedSummary": 1, "dateAdded": 1}
-#     ))
-
-#     if primary_results:
-#         results = primary_results
-#     else:
-#         results = list(collection.find(
-#             {
-#                 "isIndexed": True,
-#                 "description": {"$regex": re.escape(query), "$options": "i"}
-#             },
-#             {"_id": 1, "name": 1, "filename": 1, "isIndexed": 1, "description": 1, "generatedSummary": 1, "dateAdded": 1}
-#         ))
-
-#     for doc in results: 
-#         doc["id"] = str(doc["_id"])
-#         del doc["_id"]
-
-#     return results
-
 # Mongo setup
 client = MongoClient(os.getenv("MONGO_URI"))
 db = client[os.getenv("MONGO_DB")] # type: ignore
@@ -171,10 +140,51 @@ def delete_doc(data: dict = Body(...)):
     return {"status": "deleted", "id": doc_id}
 
 
-@router.get("/list")
+@router.get("/list2")
 def list_documents():
     docs = list(collection.find({}, {"_id": 1, "name": 1, "filename": 1, "isIndexed": 1, "description": 1, "generatedSummary": 1, "dateAdded": 1}))
     for doc in docs:
         doc["id"] = str(doc["_id"])
         del doc["_id"]
     return docs
+
+# @router.get("/list")
+# def list_documents(page: int = Query(1, ge=1), page_size: int = Query(10, ge=1, le=100)):
+#     skips = (page - 1) * page_size
+#     cursor = collection.find(
+#         {},
+#         {"_id": 1, "name": 1, "filename": 1, "isIndexed": 1, "description": 1, "generatedSummary": 1, "dateAdded": 1}
+#     ).skip(skips).limit(page_size)
+
+#     docs = list(cursor)
+#     for doc in docs:
+#         doc["id"] = str(doc["_id"])
+#         del doc["_id"]
+
+#     total = collection.count_documents({})
+#     return {"items": docs, "total": total, "page": page, "page_size": page_size}
+
+@router.get("/list")
+def list_documents(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(10, ge=1, le=100),
+    search: str = Query(None, description="Optional search by name")
+):
+    skips = (page - 1) * page_size
+
+    query_filter = {}
+    if search:
+        query_filter["name"] = {"$regex": search, "$options": "i"}
+
+    total = collection.count_documents(query_filter)
+    cursor = collection.find(
+        query_filter,
+        {"_id": 1, "name": 1, "filename": 1, "isIndexed": 1, "description": 1, "generatedSummary": 1, "dateAdded": 1}
+    ).skip(skips).limit(page_size)
+
+    docs = list(cursor)
+    for doc in docs:
+        doc["id"] = str(doc["_id"])
+        del doc["_id"]
+
+    return {"items": docs, "total": total, "page": page, "page_size": page_size}
