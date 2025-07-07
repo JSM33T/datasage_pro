@@ -3,30 +3,19 @@
 		<div class="card shadow-sm p-3 h-100">
 			<div class="row h-100">
 
-				<!-- Left Column: Referenced Documents -->
-				<!-- <div *ngIf="matches.length" class="col-md-3 border-end overflow-auto">
-					<div class="fw-semibold mb-2">Referenced Documents:</div>
-					<div class="d-flex flex-column gap-2">
-						<div *ngFor="let m of matches"
-							class="badge bg-light border text-dark d-flex align-items-center p-2">
-							<span class="me-2 fw-semibold">{{ m.doc_name }}</span>
-							<span class="text-muted small ms-1">Score: {{ m.score }}</span>
-							<a [href]="'http://localhost:8000' + m.link" target="_blank"
-								class="btn btn-sm btn-outline-primary ms-auto">
-								<i class="bi bi-download"></i>
-							</a>
-						</div>
-					</div>
-				</div> -->
 				<div class="col-md-3 border-end overflow-auto">
 					<div class="fw-semibold mb-2">Referenced Documents:</div>
 					<div *ngIf="matches.length > 0; else noDocs" class="d-flex flex-column gap-2">
 						<div *ngFor="let m of matches"
 							class="badge bg-light border text-dark d-flex align-items-center p-2">
-							<span class="me-2 fw-semibold">{{ m.doc_name }}</span>
+							<!-- <span class="me-2 fw-semibold">{{ m.doc_name }}</span> -->
+
+							<span class="me-2 fw-semibold" [title]="m.doc_name">
+								{{ m.doc_name.length > 20 ? (m.doc_name | slice:0:20) + '...' : m.doc_name }}
+							</span>
+
 							<span class="text-muted small ms-1">Score: {{ m.score }}</span>
-							<a [href]="docUrl + m.link" target="_blank"
-								class="btn btn-sm btn-outline-primary ms-auto">
+							<a [href]="docUrl + m.link" target="_blank" class="btn btn-sm btn-outline-primary ms-auto">
 								<i class="bi bi-download"></i>
 							</a>
 						</div>
