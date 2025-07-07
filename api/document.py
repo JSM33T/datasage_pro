@@ -164,7 +164,7 @@ def list_documents():
 #     total = collection.count_documents({})
 #     return {"items": docs, "total": total, "page": page, "page_size": page_size}
 
-@router.get("/list")
+@router.get("/listbak")
 def list_documents(
     page: int = Query(1, ge=1),
     page_size: int = Query(10, ge=1, le=100),
@@ -185,6 +185,32 @@ def list_documents(
     docs = list(cursor)
     for doc in docs:
         doc["id"] = str(doc["_id"])
+        del doc["_id"]
+
+    return {"items": docs, "total": total, "page": page, "page_size": page_size}
+
+@router.get("/list")
+def list_documents(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(10, ge=1, le=100),
+    search: str = Query(None, description="Optional search by name")
+):
+    skips = (page - 1) * page_size
+
+    query_filter = {}
+    if search:
+        query_filter["name"] = {"$regex": search, "$options": "i"}
+
+    total = collection.count_documents(query_filter)
+    cursor = collection.find(
+        query_filter,
+        {"_id": 1, "name": 1, "filename": 1, "isIndexed": 1, "description": 1, "generatedSummary": 1, "dateAdded": 1}
+    ).skip(skips).limit(page_size)
+
+    docs = list(cursor)
+    for idx, doc in enumerate(docs, start=skips + 1):
+        doc["id"] = str(doc["_id"])
+        doc["serial_no"] = idx
         del doc["_id"]
 
     return {"items": docs, "total": total, "page": page, "page_size": page_size}

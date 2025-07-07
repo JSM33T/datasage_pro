@@ -39,6 +39,9 @@ export class Document implements OnInit {
 	ngOnInit() {
 		this.fetchDocs();
 	}
+	get totalPages(): number {
+		return Math.ceil(this.totalDocs() / this.pageSize);
+	}
 
 	// Fetch documents with pagination and search
 	async fetchDocs() {

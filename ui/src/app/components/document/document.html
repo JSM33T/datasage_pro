@@ -5,6 +5,7 @@
 		<div class="card shadow-sm p-4 h-100">
 			<h5 class="card-title mb-4">Upload Document</h5>
 			<form [formGroup]="uploadForm" (ngSubmit)="uploadDoc()" class="row g-4">
+
 				<!-- Document Name -->
 				<div class="col-12">
 					<label class="form-label">Document Name</label>
@@ -31,6 +32,7 @@
 						{{ uploading() ? 'Uploading...' : 'Upload' }}
 					</button>
 				</div>
+
 			</form>
 		</div>
 	</div>
@@ -58,11 +60,12 @@
 						</tr>
 					</thead>
 					<tbody>
-						<tr *ngFor="let doc of filteredDocs; let i = index">
-							<td>{{ i + 1 }}</td>
+						<tr *ngFor="let doc of filteredDocs">
+							<td>{{ doc.serial_no }}</td>
 							<td>{{ doc.name }}</td>
 							<td>{{ formatDate(doc.dateAdded) }}</td>
 							<td class="d-flex gap-2">
+
 								<!-- Index Button with loader -->
 								<button class="btn btn-sm btn-outline-success"
 									[disabled]="doc.isIndexed || indexingDocId() === doc.id"
@@ -72,11 +75,6 @@
 									<span *ngIf="indexingDocId() === doc.id" class="spinner-border spinner-border-sm"
 										role="status" aria-hidden="true"></span>
 								</button>
-
-								<!-- Download Button -->
-								<!-- <button class="btn btn-sm btn-outline-primary" (click)="download(doc)">
-									Download
-								</button> -->
 
 								<!-- Delete Button -->
 								<button class="btn btn-sm btn-outline-danger" (click)="delete(doc.id)">
@@ -95,6 +93,12 @@
 								[disabled]="currentPage() === 1">
 								Previous
 							</button>
+						</li>
+
+						<li class="page-item disabled">
+							<span class="page-link">
+								Page {{ currentPage() }} of {{ totalPages }}
+							</span>
 						</li>
 
 						<li class="page-item" [class.disabled]="currentPage() * pageSize >= totalDocs()">

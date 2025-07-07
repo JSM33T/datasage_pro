@@ -398,7 +398,8 @@ def retrieve_context_from_faiss(doc_ids, query, top_k=5):
             matched_chunks.append(all_text_chunks[idx])
             doc_id = chunk_doc_map[idx]
             distance = float(D[0][i])  # ensure native float
-            score = float(1 / (distance + 1e-6))  # convert to float
+            #score = float(1 / (distance + 1e-6))  # convert to float
+            score = round(1 / (float(distance) + 1e-6), 2)
             doc_score[doc_id] = doc_score.get(doc_id, 0.0) + score
 
     return "\n\n".join(matched_chunks), doc_score
