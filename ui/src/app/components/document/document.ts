@@ -102,7 +102,7 @@ export class Document implements OnInit {
 	}
 
 	// Upload document
-	async uploadDoc() {
+	async uploadDoc_OLD() {
 		if (!this.selectedFile || !this.uploadForm.valid) return;
 
 		this.uploading.set(true);
@@ -119,6 +119,39 @@ export class Document implements OnInit {
 		this.uploading.set(false);
 		this.fetchDocs();
 	}
+
+	// Upload document
+	async uploadDoc() {
+		if (!this.selectedFile || !this.uploadForm.valid) return;
+
+		this.uploading.set(true);
+
+		const formData = new FormData();
+		formData.append('file', this.selectedFile);
+		formData.append('name', this.uploadForm.value.name || '');
+		formData.append('description', this.uploadForm.value.description || '');
+
+		try {
+			await this.http.post(`${this.API}/document/add`, formData).toPromise();
+			this.uploadForm.reset();
+			this.selectedFile = null;
+
+			// Clear file input element
+			const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+			if (fileInput) fileInput.value = '';
+
+			this.showToast('Document uploaded successfully.');
+			this.fetchDocs();
+		} catch (error: any) {
+			console.error('Upload failed:', error);
+			const errMsg = error?.error?.error || 'Upload failed.';
+			this.showToast(errMsg, true);
+		} finally {
+			this.uploading.set(false);
+		}
+	}
+
+
 
 	// Delete document
 	delete(docId: string) {

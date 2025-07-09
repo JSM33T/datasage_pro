@@ -88,7 +88,54 @@ async def add_document(
     description: str = Form(...)
 ):
     try:
-        # ✅ Check for duplicate
+        allowed_ext = [".doc", ".docx", ".pdf"]
+        ext = os.path.splitext(file.filename)[1].lower()
+        if ext not in allowed_ext:
+            return JSONResponse(status_code=400, content={"error": f"File type {ext} not allowed"})
+
+        # Check for duplicate
+        if collection.find_one({"filename": file.filename}):
+            return JSONResponse(status_code=400, content={"error": "File with this name already exists"})
+
+        doc_id = str(uuid.uuid4())
+        doc_dir = RESOURCE_DIR / doc_id
+        doc_dir.mkdir(parents=True, exist_ok=True)
+
+        file_path = doc_dir / file.filename
+        with open(file_path, "wb") as f:
+            f.write(await file.read())
+
+        collection.insert_one({
+            "_id": doc_id,
+            "name": name,
+            "filename": file.filename,
+            "description": description,
+            "generatedSummary": "",
+            "isIndexed": False,
+            "dateAdded": datetime.utcnow()
+        })
+
+        return {
+            "id": doc_id,
+            "filename": file.filename,
+            "name": name,
+            "isIndexed": False,
+            "description": description,
+            "generatedSummary": ""
+        }
+
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+@router.post("/add2")
+async def add_document(
+    file: UploadFile = File(...),
+    name: str = Form(...),
+    description: str = Form(...)
+):
+    try:
+        #  Check for duplicate
         if collection.find_one({"filename": file.filename}):
             return JSONResponse(status_code=400, content={"error": "File with this name already exists"})
 
@@ -128,66 +175,25 @@ def delete_doc(data: dict = Body(...)):
     if not doc_id:
         return JSONResponse(status_code=400, content={"error": "Missing doc_id"})
 
-    doc_dir = RESOURCE_DIR / doc_id
-    if not doc_dir.exists():
-        return JSONResponse(status_code=404, content={"error": "Document not found"})
-
-    # Optional: remove from Mongo
+    # Always remove from Mongo
     collection.delete_one({"_id": doc_id})
 
-    # Delete folder
-    shutil.rmtree(doc_dir, ignore_errors=True)
+    # Delete folder if it exists
+    doc_dir = RESOURCE_DIR / doc_id
+    if doc_dir.exists():
+        shutil.rmtree(doc_dir, ignore_errors=True)
+
     return {"status": "deleted", "id": doc_id}
 
 
-@router.get("/list2")
-def list_documents():
-    docs = list(collection.find({}, {"_id": 1, "name": 1, "filename": 1, "isIndexed": 1, "description": 1, "generatedSummary": 1, "dateAdded": 1}))
-    for doc in docs:
-        doc["id"] = str(doc["_id"])
-        del doc["_id"]
-    return docs
 
-# @router.get("/list")
-# def list_documents(page: int = Query(1, ge=1), page_size: int = Query(10, ge=1, le=100)):
-#     skips = (page - 1) * page_size
-#     cursor = collection.find(
-#         {},
-#         {"_id": 1, "name": 1, "filename": 1, "isIndexed": 1, "description": 1, "generatedSummary": 1, "dateAdded": 1}
-#     ).skip(skips).limit(page_size)
-
-#     docs = list(cursor)
+# @router.get("/list2")
+# def list_documents():
+#     docs = list(collection.find({}, {"_id": 1, "name": 1, "filename": 1, "isIndexed": 1, "description": 1, "generatedSummary": 1, "dateAdded": 1}))
 #     for doc in docs:
 #         doc["id"] = str(doc["_id"])
 #         del doc["_id"]
-
-#     total = collection.count_documents({})
-#     return {"items": docs, "total": total, "page": page, "page_size": page_size}
-
-@router.get("/listbak")
-def list_documents(
-    page: int = Query(1, ge=1),
-    page_size: int = Query(10, ge=1, le=100),
-    search: str = Query(None, description="Optional search by name")
-):
-    skips = (page - 1) * page_size
-
-    query_filter = {}
-    if search:
-        query_filter["name"] = {"$regex": search, "$options": "i"}
-
-    total = collection.count_documents(query_filter)
-    cursor = collection.find(
-        query_filter,
-        {"_id": 1, "name": 1, "filename": 1, "isIndexed": 1, "description": 1, "generatedSummary": 1, "dateAdded": 1}
-    ).skip(skips).limit(page_size)
-
-    docs = list(cursor)
-    for doc in docs:
-        doc["id"] = str(doc["_id"])
-        del doc["_id"]
-
-    return {"items": docs, "total": total, "page": page, "page_size": page_size}
+#     return docs
 
 @router.get("/list")
 def list_documents(
