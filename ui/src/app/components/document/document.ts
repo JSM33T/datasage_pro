@@ -119,9 +119,47 @@ export class Document implements OnInit {
 		this.uploading.set(false);
 		this.fetchDocs();
 	}
-
 	// Upload document
 	async uploadDoc() {
+		if (!this.selectedFile || !this.uploadForm.valid) return;
+
+		this.uploading.set(true);
+
+		const formData = new FormData();
+		formData.append('file', this.selectedFile);
+		formData.append('name', this.uploadForm.value.name || '');
+		formData.append('description', this.uploadForm.value.description || '');
+
+		try {
+			// Get response with id
+			const uploadResponse: any = await this.http.post(`${this.API}/document/add`, formData).toPromise();
+
+			this.uploadForm.reset();
+			this.selectedFile = null;
+
+			// Clear file input element
+			const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+			if (fileInput) fileInput.value = '';
+
+			this.showToast('Document uploaded successfully.');
+
+			// Call indexing API for uploaded document
+			if (uploadResponse?.id) {
+				await this.indexDoc(uploadResponse.id);
+			}
+
+			this.fetchDocs();
+		} catch (error: any) {
+			console.error('Upload failed:', error);
+			const errMsg = error?.error?.error || 'Upload failed.';
+			this.showToast(errMsg, true);
+		} finally {
+			this.uploading.set(false);
+		}
+	}
+
+	// Upload document
+	async uploadDoc_OLD2() {
 		if (!this.selectedFile || !this.uploadForm.valid) return;
 
 		this.uploading.set(true);
