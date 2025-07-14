@@ -49,6 +49,10 @@
 							placeholder="Type your message..." [disabled]="loading">
 						<button type="submit" class="btn btn-primary"
 							[disabled]="loading || !query.trim()">Send</button>
+						<button type="button" class="btn btn-outline-secondary" (click)="clearSession()"
+							[disabled]="loading">
+							Clear Session
+						</button>
 					</form>
 				</div>
 
