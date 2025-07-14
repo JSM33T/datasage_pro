@@ -5,11 +5,20 @@ from pymongo import MongoClient
 from pathlib import Path
 from datetime import datetime
 from uuid import uuid4
+
 import openai
 import os
 import faiss
 import pickle
 import numpy as np
+import nltk
+from nltk import sent_tokenize
+
+# Ensure NLTK punkt is available
+try:
+    nltk.data.find('tokenizers/punkt')
+except LookupError:
+    nltk.download('punkt', quiet=True)
 
 # === Setup ===
 load_dotenv(override=True)  # force reload
@@ -94,7 +103,8 @@ def retrieve_context_from_faiss(doc_ids, query, top_k=5):
             meta = pickle.load(f)
             text_chunks = meta.get("text", [])
             if isinstance(text_chunks, str):
-                text_chunks = [text_chunks]
+                # Use NLTK to split into sentences if not already chunked
+                text_chunks = sent_tokenize(text_chunks)
 
         # Search this document's index
         D, I = index.search(query_vec, min(top_k, len(text_chunks)))
@@ -142,18 +152,18 @@ def start_chat(data: dict = Body(...)):
     new_session = sessions.find_one({ "_id": session_id }, {"_id": 1, "doc_ids": 1, "createdAt": 1 })
     documents = db["documents"]
     doc_meta = list(documents.find(
-		{ "_id": { "$in": new_session.get("doc_ids", []) } }, # type: ignore
-		{ "_id": 1, "name": 1, "filename": 1 }
-	))
+        { "_id": { "$in": new_session.get("doc_ids", []) } }, # type: ignore
+        { "_id": 1, "name": 1, "filename": 1 }
+    ))
 
     return {
-		"session_id": session_id,
-		"session": {
-			"id": new_session["_id"], # type: ignore
-			"createdAt": new_session["createdAt"], # type: ignore
-			"documents": doc_meta
-		}
-	}
+        "session_id": session_id,
+        "session": {
+            "id": new_session["_id"], # type: ignore
+            "createdAt": new_session["createdAt"], # type: ignore
+            "documents": doc_meta
+        }
+    }
 
 # === API: Continue chat ===
 @router.post("/continue")

@@ -133,18 +133,18 @@ def start_chat(data: dict = Body(...)):
     new_session = sessions.find_one({ "_id": session_id }, {"_id": 1, "doc_ids": 1, "createdAt": 1 })
     documents = db["documents"]
     doc_meta = list(documents.find(
-		{ "_id": { "$in": new_session.get("doc_ids", []) } }, # type: ignore
-		{ "_id": 1, "name": 1, "filename": 1 }
-	))
+        { "_id": { "$in": new_session.get("doc_ids", []) } }, # type: ignore
+        { "_id": 1, "name": 1, "filename": 1 }
+    ))
 
     return {
-		"session_id": session_id,
-		"session": {
-			"id": new_session["_id"], # type: ignore
-			"createdAt": new_session["createdAt"], # type: ignore
-			"documents": doc_meta
-		}
-	}
+        "session_id": session_id,
+        "session": {
+            "id": new_session["_id"], # type: ignore
+            "createdAt": new_session["createdAt"], # type: ignore
+            "documents": doc_meta
+        }
+    }
 
 # === API: Continue chat ===
 @router.post("/continue")
@@ -162,20 +162,24 @@ def continue_chat(data: dict = Body(...)):
     messages.append({ "role": "user", "content": query })
 
     # Fetch context from FAISS + .pkl
-    #context_text = retrieve_context_from_faiss(chat["doc_ids"], query)
     fresh_doc_ids = sessions.find_one({"_id": session_id}, {"doc_ids": 1}).get("doc_ids", []) # type: ignore
-    #context_text = retrieve_context_from_faiss(fresh_doc_ids, query)
     context_text, _ = retrieve_context_from_faiss(fresh_doc_ids, query)
 
+    # Log context for debugging
+    print("\n[DEBUG] Context chunks sent to LLM:\n", context_text, "\n")
 
+    # Prompt engineering: restrict LLM to context only
+    system_prompt = (
+        "You are a helpful assistant. Answer ONLY using the information in the provided context below. "
+        "If the answer is not present in the context, reply with 'I don't know.'\n\nContext:\n" + context_text
+    )
 
-    # Call GPT
     gpt_response = openai_client.chat.completions.create(
         model=os.getenv("OPENAI_MODEL", "gpt-3.5-turbo"),
         messages=[
             {
                 "role": "system",
-                "content": "You are a helpful assistant. Use the following documents to answer accurately and precisely wihtout hitting around the bush :\n\n" + context_text
+                "content": system_prompt
             },
             *messages
         ]
@@ -240,15 +244,31 @@ def continue_chat_all_docs(data: dict = Body(...)):
     # === Retrieve context ===
     context_text, doc_score = retrieve_context_from_faiss(all_doc_ids, query)
 
-    # === Token count trimming for context_text ===
+    # Log context for debugging
+    print("\n[DEBUG] Context chunks sent to LLM:\n", context_text, "\n")
+
+    # === Token count trimming for context_text at chunk boundaries ===
     MAX_CONTEXT_TOKENS = 3000
-    context_tokens = count_tokens(context_text)
-    if context_tokens > MAX_CONTEXT_TOKENS:
-        context_text = ' '.join(context_text.split()[:MAX_CONTEXT_TOKENS])
+    context_chunks = context_text.split("\n\n")
+    trimmed_context = []
+    total_tokens = 0
+    for chunk in context_chunks:
+        chunk_tokens = count_tokens(chunk)
+        if total_tokens + chunk_tokens > MAX_CONTEXT_TOKENS:
+            break
+        trimmed_context.append(chunk)
+        total_tokens += chunk_tokens
+    context_text_final = "\n\n".join(trimmed_context)
 
     # === Limit message history ===
     MAX_MESSAGES = 10
     messages = messages[-MAX_MESSAGES:]
+
+    # Prompt engineering: restrict LLM to context only
+    system_prompt = (
+        "You are a helpful document context assistant. Answer ONLY using the information in the provided context below. "
+        "If the answer is not present in the context, reply with 'I don't know.'\n\nContext:\n" + context_text_final
+    )
 
     # === Call GPT ===
     gpt_response = openai_client.chat.completions.create(
@@ -256,7 +276,7 @@ def continue_chat_all_docs(data: dict = Body(...)):
         messages=[
             {
                 "role": "system",
-                "content": "You are a helpful document context assistant. Use the following documents to answer accurately and precisely. Avoid unnecessary explanations or unrelated information::\n\n" + context_text
+                "content": system_prompt
             },
             *messages
         ]
