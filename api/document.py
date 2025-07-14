@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 from fastapi import APIRouter, UploadFile, File, Form,Query
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 from dotenv import load_dotenv
 from pymongo import MongoClient
 import os
@@ -194,6 +194,14 @@ def delete_doc(data: dict = Body(...)):
 #         doc["id"] = str(doc["_id"])
 #         del doc["_id"]
 #     return docs
+
+@router.get("/download/{doc_id}/{filename}")
+def download_document(doc_id: str, filename: str):
+    doc_dir = RESOURCE_DIR / doc_id
+    file_path = doc_dir / filename
+    if not file_path.exists() or not file_path.is_file():
+        return JSONResponse(status_code=404, content={"error": "File not found"})
+    return FileResponse(str(file_path), filename=filename)
 
 @router.get("/list")
 def list_documents(

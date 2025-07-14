@@ -45,13 +45,15 @@ export class Document implements OnInit {
 
 	// Fetch documents with pagination and search
 	async fetchDocs() {
+		const adminToken = localStorage.getItem('token') || '';
 		const res: any = await this.http
 			.get(`${this.API}/document/list`, {
 				params: {
 					page: this.currentPage().toString(),
 					page_size: this.pageSize.toString(),
 					search: this.search() || ''
-				}
+				},
+				headers: { Authorization: adminToken }
 			})
 			.toPromise();
 
@@ -79,11 +81,14 @@ export class Document implements OnInit {
 	// Index a document
 	async indexDoc(docId: string): Promise<void> {
 		this.indexingDocId.set(docId);
+		const adminToken = localStorage.getItem('token') || '';
 		try {
 			const response: any = await firstValueFrom(
-				this.http.post(`${this.API}/indexing/index`, {
-					doc_ids: [docId]
-				})
+				this.http.post(
+					`${this.API}/indexing/index`,
+					{ doc_ids: [docId] },
+					{ headers: { Authorization: adminToken } }
+				)
 			);
 
 			const result = response?.results?.find((r: any) => r.id === docId);
@@ -130,9 +135,15 @@ export class Document implements OnInit {
 		formData.append('name', this.uploadForm.value.name || '');
 		formData.append('description', this.uploadForm.value.description || '');
 
+		const adminToken = localStorage.getItem('token') || '';
+
 		try {
 			// Get response with id
-			const uploadResponse: any = await this.http.post(`${this.API}/document/add`, formData).toPromise();
+			const uploadResponse: any = await this.http.post(
+				`${this.API}/document/add`,
+				formData,
+				{ headers: { Authorization: adminToken } }
+			).toPromise();
 
 			this.uploadForm.reset();
 			this.selectedFile = null;
@@ -194,7 +205,12 @@ export class Document implements OnInit {
 	// Delete document
 	delete(docId: string) {
 		if (confirm('Delete this document?')) {
-			this.http.post(`${this.API}/document/delete`, { doc_id: docId }).subscribe(() => {
+			const adminToken = localStorage.getItem('token') || '';
+			this.http.post(
+				`${this.API}/document/delete`,
+				{ doc_id: docId },
+				{ headers: { Authorization: adminToken } }
+			).subscribe(() => {
 				this.fetchDocs();
 			});
 		}
@@ -202,8 +218,28 @@ export class Document implements OnInit {
 
 	// Download document
 	download(doc: any) {
-		const url = `${this.API}/resources/${doc.id}/${doc.filename}`;
-		window.open(url, '_blank');
+		// Use the new API endpoint for download
+		const adminToken = localStorage.getItem('token') || '';
+		const url = `${this.API}/document/download/${doc.id}/${encodeURIComponent(doc.filename)}`;
+		// Create a hidden link to set the Authorization header
+		fetch(url, {
+			headers: { Authorization: adminToken }
+		})
+			.then(response => {
+				if (!response.ok) throw new Error('Download failed');
+				return response.blob();
+			})
+			.then(blob => {
+				const link = document.createElement('a');
+				link.href = window.URL.createObjectURL(blob);
+				link.download = doc.filename;
+				document.body.appendChild(link);
+				link.click();
+				document.body.removeChild(link);
+			})
+			.catch(() => {
+				this.showToast('Download failed.', true);
+			});
 	}
 
 	// File change event
