@@ -171,7 +171,7 @@ def continue_chat(data: dict = Body(...)):
     # Prompt engineering: restrict LLM to context only
     system_prompt = (
         "You are a helpful assistant. Answer ONLY using the information in the provided context below. "
-        "If the answer is not present in the context, reply with 'I don't know.'\n\nContext:\n" + context_text
+        "If the answer is not present in the context, reply with 'No revelant document found.'\n\nContext:\n" + context_text
     )
 
     gpt_response = openai_client.chat.completions.create(
@@ -264,27 +264,28 @@ def continue_chat_all_docs(data: dict = Body(...)):
     MAX_MESSAGES = 10
     messages = messages[-MAX_MESSAGES:]
 
-    # Prompt engineering: restrict LLM to context only
-    system_prompt = (
-        "You are a helpful document context assistant. Answer ONLY using the information in the provided context below. "
-        "If the answer is not present in the context, reply with 'I don't know.'\n\nContext:\n" + context_text_final
-    )
+    # Strict anti-hallucination: if no context or all scores below threshold, reply "I don't know."
+    SIMILARITY_THRESHOLD = 0.75
+    if not context_text_final or all(score < SIMILARITY_THRESHOLD for score in doc_score.values()):
+        reply = "I don't know."
+    else:
+        system_prompt = (
+            "You are a helpful document context assistant. Answer ONLY using the information in the provided context below. "
+            "If the answer is not present in the context, reply with 'I don't know.'\n\nContext:\n" + context_text_final
+        )
+        gpt_response = openai_client.chat.completions.create(
+            model=os.getenv("OPENAI_MODEL", "gpt-3.5-turbo"),
+            messages=[
+                {
+                    "role": "system",
+                    "content": system_prompt
+                },
+                *messages
+            ]
+        )
+        reply = gpt_response.choices[0].message.content.strip()  # type: ignore
 
-    # === Call GPT ===
-    gpt_response = openai_client.chat.completions.create(
-        model=os.getenv("OPENAI_MODEL", "gpt-3.5-turbo"),
-        messages=[
-            {
-                "role": "system",
-                "content": system_prompt
-            },
-            *messages
-        ]
-    )
-
-    reply = gpt_response.choices[0].message.content.strip()  # type: ignore
     messages.append({ "role": "assistant", "content": reply })
-
     sessions.update_one({ "_id": session_id }, { "$set": { "messages": messages } })
 
     # === Sort docs by relevance score ===
