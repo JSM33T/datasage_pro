@@ -1,25 +1,85 @@
+
+
+
 from fastapi import APIRouter, Body
 from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
 from pymongo import MongoClient
 from pathlib import Path
+from datetime import datetime
+from uuid import uuid4
+import openai
+import os
 import faiss
 import pickle
 import numpy as np
-import openai
-import os
 
-load_dotenv()
-
+# === Setup ===
+load_dotenv(override=True)
 router = APIRouter()
 
 RESOURCE_DIR = Path("./resources")
 client = MongoClient(os.getenv("MONGO_URI"))
 db = client[os.getenv("MONGO_DB")] # type: ignore
-docs = db["documents"]
-
+sessions = db["chat_sessions"]
 openai_client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
+
+# === Get session details for UI compatibility ===
+@router.get("/get_session/{session_id}")
+def get_session(session_id: str):
+    chat = sessions.find_one({ "_id": session_id })
+    if not chat:
+        return JSONResponse(status_code=404, content={"error": "Session not found"})
+    return {
+        "session_id": chat["_id"],
+        "doc_ids": chat["doc_ids"],
+        "messages": chat["messages"]
+    }
+
+
+# === API: Clear all chat sessions ===
+@router.post("/clear_all_sessions")
+def clear_all_sessions():
+    sessions.delete_many({})
+    return {"status": "success", "message": "All chat sessions cleared."}
+
+# === API: Clear messages for a specific session ===
+@router.post("/clear_session/{session_id}")
+def clear_session(session_id: str):
+    result = sessions.update_one({"_id": session_id}, {"$set": {"messages": []}})
+    if result.matched_count == 0:
+        return JSONResponse(status_code=404, content={"error": "Session not found"})
+    return {"status": "success", "message": f"Session {session_id} messages cleared."}
+
+# === Get session details for UI compatibility ===
+@router.get("/get_session/{session_id}")
+def get_session(session_id: str):
+    chat = sessions.find_one({ "_id": session_id })
+    if not chat:
+        return JSONResponse(status_code=404, content={"error": "Session not found"})
+    return {
+        "session_id": chat["_id"],
+        "doc_ids": chat["doc_ids"],
+        "messages": chat["messages"]
+    }
+
+
+# === API: Clear all chat sessions ===
+@router.post("/clear_all_sessions")
+def clear_all_sessions():
+    sessions.delete_many({})
+    return {"status": "success", "message": "All chat sessions cleared."}
+
+# === API: Clear messages for a specific session ===
+@router.post("/clear_session/{session_id}")
+def clear_session(session_id: str):
+    result = sessions.update_one({"_id": session_id}, {"$set": {"messages": []}})
+    if result.matched_count == 0:
+        return JSONResponse(status_code=404, content={"error": "Session not found"})
+    return {"status": "success", "message": f"Session {session_id} messages cleared."}
+
+# === Embedding helper ===
 def get_embedding(text: str):
     response = openai_client.embeddings.create(
         model="text-embedding-ada-002",
@@ -27,61 +87,185 @@ def get_embedding(text: str):
     )
     return np.array([response.data[0].embedding], dtype="float32")
 
-@router.post("/chat")
-async def chat_with_docs(data: dict = Body(...)):
-    doc_ids = data.get("doc_ids")
-    query = data.get("query")
-    if not doc_ids or not query:
-        return JSONResponse(status_code=400, content={"error": "Missing doc_ids or query"})
+# === Context retrieval from FAISS + .pkl ===
+def retrieve_context_from_faiss(doc_ids, query, top_k=3):
+    combined_index = None
+    all_text_chunks = []
+    chunk_doc_map = []
 
-    try:
-        combined_index = None
-        all_metadata = []
+    for doc_id in doc_ids:
+        doc_dir = RESOURCE_DIR / doc_id
+        faiss_path = doc_dir / f"{doc_id}.faiss"
+        pkl_path = doc_dir / f"{doc_id}.pkl"
 
-        for doc_id in doc_ids:
-            doc_dir = RESOURCE_DIR / doc_id
-            faiss_path = doc_dir / f"{doc_id}.faiss"
-            pkl_path = doc_dir / f"{doc_id}.pkl"
+        if not faiss_path.exists() or not pkl_path.exists():
+            continue
 
-            if not faiss_path.exists() or not pkl_path.exists():
-                continue
+        index = faiss.read_index(str(faiss_path))
+        with open(pkl_path, "rb") as f:
+            meta = pickle.load(f)
+            text_chunks = meta.get("text", [])
+            if isinstance(text_chunks, str):
+                text_chunks = [text_chunks]
 
-            index = faiss.read_index(str(faiss_path))
-            with open(pkl_path, "rb") as f:
-                meta = pickle.load(f)
-                all_metadata.append(meta)
-
-            if combined_index is None:
-                combined_index = index
-            else:
-                combined_index.merge_from(index)
+        for chunk in text_chunks:
+            all_text_chunks.append(chunk)
+            chunk_doc_map.append(doc_id)
 
         if combined_index is None:
-            return JSONResponse(status_code=404, content={"error": "No index files found"})
+            combined_index = index
+        else:
+            combined_index.merge_from(index)
 
-        query_vec = get_embedding(query)
-        top_k = 3
-        D, I = combined_index.search(query_vec, top_k)
+    if combined_index is None or not all_text_chunks:
+        return "No relevant document content found.", {}
 
-        context = "\n\n".join(all_metadata[i].get("text", "") for i in I[0] if i < len(all_metadata))
+    query_vec = get_embedding(query)
+    D, I = combined_index.search(query_vec, top_k)
 
-        messages = [
-            {"role": "system", "content": "You are a helpful assistant that answers questions based on provided documents.Be very precise and dont hit around the bush. reply to /json with the jsonified data that you can extract from the document"},
-            {"role": "user", "content": f"Context:\n{context}\n\nQuestion: {query}"}
-        ]
+    matched_chunks = []
+    doc_score = {}
 
-        chat_response = openai_client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=messages # type: ignore
-        )
+    for i, idx in enumerate(I[0]):
+        if 0 <= idx < len(all_text_chunks):
+            matched_chunks.append(all_text_chunks[idx])
+            doc_id = chunk_doc_map[idx]
+            distance = float(D[0][i])
+            score = round(1 / (distance + 1e-6), 2)
+            doc_score[doc_id] = doc_score.get(doc_id, 0.0) + score
 
-        answer = chat_response.choices[0].message.content.strip() # type: ignore
+    return "\n\n".join(matched_chunks), doc_score
 
-        return {
-            "query": query,
-            "answer": answer,
-            "context": context
+# === API: List sessions (excluding master/all-docs session) ===
+@router.get("/list_sessions")
+def list_sessions():
+    all_sessions = sessions.find({}, {"_id": 1, "doc_ids": 1, "createdAt": 1})
+    documents = db["documents"]
+
+    enriched_sessions = []
+    all_doc_ids = [doc["_id"] for doc in documents.find({}, {"_id": 1})]
+    for s in all_sessions:
+        doc_ids = s.get("doc_ids", [])
+        # Exclude master session (all docs)
+        if set(doc_ids) == set(all_doc_ids):
+            continue
+        doc_meta = list(documents.find(
+            { "_id": { "$in": doc_ids } },
+            { "_id": 1, "name": 1, "filename": 1 }
+        ))
+        enriched_sessions.append({
+            "id": s["_id"],
+            "createdAt": s.get("createdAt"),
+            "documents": doc_meta,
+            "doc_ids": doc_ids
+        })
+    return enriched_sessions
+
+# === API: Start chat session with selected docs ===
+@router.post("/start")
+def start_chat(data: dict = Body(...)):
+    doc_ids = data.get("doc_ids")
+    if not doc_ids:
+        return JSONResponse(status_code=400, content={"error": "doc_ids required"})
+
+    session_id = str(uuid4())
+    sessions.insert_one({
+        "_id": session_id,
+        "doc_ids": doc_ids,
+        "messages": [],
+        "createdAt": datetime.utcnow()
+    })
+    new_session = sessions.find_one({ "_id": session_id }, {"_id": 1, "doc_ids": 1, "createdAt": 1 })
+    documents = db["documents"]
+    doc_meta = list(documents.find(
+        { "_id": { "$in": new_session.get("doc_ids", []) } }, # type: ignore
+        { "_id": 1, "name": 1, "filename": 1 }
+    ))
+
+    return {
+        "session_id": session_id,
+        "session": {
+            "id": new_session["_id"], # type: ignore
+            "createdAt": new_session["createdAt"], # type: ignore
+            "documents": doc_meta
         }
+    }
 
-    except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
+# === API: Continue chat in a session ===
+@router.post("/continue")
+def continue_chat(data: dict = Body(...)):
+    session_id = data.get("session_id")
+    query = data.get("query")
+    if not session_id or not query:
+        return JSONResponse(status_code=400, content={"error": "session_id and query required"})
+
+    chat = sessions.find_one({ "_id": session_id })
+    if not chat:
+        return JSONResponse(status_code=404, content={"error": "Session not found"})
+
+    messages = chat["messages"]
+    messages.append({ "role": "user", "content": query })
+
+    # Fetch context from FAISS + .pkl
+    doc_ids = chat.get("doc_ids", [])
+    context_text, doc_score = retrieve_context_from_faiss(doc_ids, query)
+
+    # Limit message history
+    MAX_MESSAGES = 10
+    messages = messages[-MAX_MESSAGES:]
+
+    # Strict anti-hallucination: if no context or all scores below threshold, reply "I don't know." except for greetings
+    SIMILARITY_THRESHOLD = 0.75
+    greetings = ["hi", "hello", "hey", "greetings", "good morning", "good afternoon", "good evening"]
+    user_query = query.strip().lower()
+    if (not context_text or all(score < SIMILARITY_THRESHOLD for score in doc_score.values())):
+        if any(greet in user_query for greet in greetings):
+            reply = "Hello! How can I assist you with your selected documents?"
+        else:
+            reply = "I don't know."
+    else:
+        system_prompt = (
+            "You are a helpful document context assistant. Answer ONLY using the information in the provided context below. "
+            "If the answer is not present in the context, reply with 'No relevant document found for your query.'\n\nContext:\n" + context_text
+        )
+        gpt_response = openai_client.chat.completions.create(
+            model=os.getenv("OPENAI_MODEL", "gpt-3.5-turbo"),
+            messages=[
+                {
+                    "role": "system",
+                    "content": system_prompt
+                },
+                *messages
+            ]
+        )
+        reply = gpt_response.choices[0].message.content.strip()  # type: ignore
+
+    messages.append({ "role": "assistant", "content": reply })
+    sessions.update_one({ "_id": session_id }, { "$set": { "messages": messages } })
+
+    # Sort docs by relevance score
+    sorted_docs = sorted(doc_score.items(), key=lambda x: x[1], reverse=True)
+    top_doc_ids = [doc_id for doc_id, _ in sorted_docs]
+
+    documents = db["documents"]
+    docs_cursor = documents.find(
+        { "_id": { "$in": top_doc_ids } },
+        { "_id": 1, "name": 1, "filename": 1 }
+    )
+    doc_map = { str(d["_id"]): d for d in docs_cursor }
+
+    matched_docs = [
+        {
+            "doc_id": str(doc_id),
+            "doc_name": doc_map.get(str(doc_id), {}).get("name", ""),
+            "link": f"/resources/{doc_id}/{doc_map.get(str(doc_id), {}).get('filename', '')}",
+            "score": doc_score[doc_id]
+        }
+        for doc_id in top_doc_ids if str(doc_id) in doc_map
+    ]
+
+    return {
+        "reply": reply,
+        "messages": messages,
+        "matched_docs": matched_docs
+    }

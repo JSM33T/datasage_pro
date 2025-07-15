@@ -24,6 +24,7 @@ import 'prismjs/components/prism-batch';
 	standalone: true,
 	imports: [CommonModule, FormsModule],
 	templateUrl: 'chat-component.html',
+	styleUrls: ['chat-component.css']
 })
 export class ChatComponent implements OnInit {
 	@ViewChild('chatWindow') chatWindowRef!: ElementRef;
@@ -35,6 +36,14 @@ export class ChatComponent implements OnInit {
 	messages: { role: string; content: string }[] = [];
 	query = '';
 	loading = false;
+	statusMessage = '';
+	statusType: 'success' | 'error' | 'info' | '' = '';
+
+	// Confirmation dialog properties
+	showConfirmDialog = false;
+	confirmTitle = '';
+	confirmMessage = '';
+	confirmAction: (() => void) | null = null;
 
 	sessionId: string | null = null;
 	sessionOptions: {
@@ -68,12 +77,21 @@ export class ChatComponent implements OnInit {
 		return docs.map(d => d.name).join(', ');
 	}
 
+
 	async loadSessionOptions() {
 		try {
 			const res: any = await firstValueFrom(
-				this.http.get(`${environment.apiBase}/chat_session/list_sessions`)
+				this.http.get(`${environment.apiBase}/chat/list_sessions`)
 			);
 			this.sessionOptions = res;
+
+			// If current active session is no longer in the list, reset it
+			if (this.activeSessionId && !this.sessionOptions.some(s => s.id === this.activeSessionId)) {
+				this.activeSessionId = null;
+				this.sessionId = null;
+				this.messages = [];
+				localStorage.removeItem('activeSession');
+			}
 		} catch (err) {
 			console.error('Failed to fetch session list:', err);
 		}
@@ -81,25 +99,23 @@ export class ChatComponent implements OnInit {
 
 	async loadSession(sessionId: string) {
 		try {
+			// Always fetch session details from backend for accuracy
 			const res: any = await firstValueFrom(
-				this.http.get(`${environment.apiBase}/chat_session/get_session/${sessionId}`)
+				this.http.get(`${environment.apiBase}/chat/get_session/${sessionId}`)
 			);
-
-			this.sessionId = res.session_id;
+			this.sessionId = res.session_id || sessionId;
 			this.activeSessionId = sessionId;
 			this.messages = res.messages || [];
 			this.selectedDocIds = res.doc_ids || [];
-
 			localStorage.setItem('activeSession', sessionId);
 
+			// Pin all selected documents
 			if (this.selectedDocIds.length > 0) {
 				const docRes = await firstValueFrom(
 					this.http.get<any[]>(
 						`${environment.apiBase}/document/by_ids?ids=${this.selectedDocIds.join(',')}`
 					)
 				);
-
-				// Auto-pin all selected documents
 				this.pinnedDocs = Array.isArray(docRes)
 					? docRes.filter(doc => this.selectedDocIds.includes(doc.id))
 					: [];
@@ -136,19 +152,28 @@ export class ChatComponent implements OnInit {
 		return [...this.pinnedDocs, ...unpinned.slice(0, 5)];
 	}
 
+
 	togglePin(doc: any): void {
+		// Only allow pinning if not already pinned and selected
+		const isChecked = this.selectedDocIds.includes(doc.id);
 		const index = this.pinnedDocs.findIndex(d => d.id === doc.id);
-		if (index > -1) {
-			this.pinnedDocs.splice(index, 1);
-		} else {
-			this.pinnedDocs.push(doc);
+		if (!isChecked) {
+			// Allow normal pin/unpin if not checked
+			if (index > -1) {
+				this.pinnedDocs.splice(index, 1);
+			} else {
+				this.pinnedDocs.push(doc);
+			}
 		}
+		// If checked, always keep pinned, do nothing on pin click
 	}
 
 	async startNewSession(): Promise<void> {
 		this.sessionId = null;
+		this.activeSessionId = null;
 		this.messages = [];
 		this.selectedDocIds = [];
+		this.pinnedDocs = [];
 		localStorage.removeItem('activeSession');
 	}
 
@@ -156,11 +181,21 @@ export class ChatComponent implements OnInit {
 		return this.pinnedDocs.some(d => d.id === docId);
 	}
 
+
 	toggleSelect(docId: string, isChecked: boolean) {
 		if (isChecked) {
-			this.selectedDocIds.push(docId);
+			if (!this.selectedDocIds.includes(docId)) {
+				this.selectedDocIds.push(docId);
+			}
+			// Auto-pin if not already pinned
+			const doc = [...this.searchResults, ...this.pinnedDocs].find(d => d.id === docId);
+			if (doc && !this.pinnedDocs.some(d => d.id === docId)) {
+				this.pinnedDocs.push(doc);
+			}
 		} else {
 			this.selectedDocIds = this.selectedDocIds.filter(id => id !== docId);
+			// Unpin if unchecked
+			this.pinnedDocs = this.pinnedDocs.filter(d => d.id !== docId);
 		}
 	}
 
@@ -204,6 +239,7 @@ export class ChatComponent implements OnInit {
 		return escaped.replace(/%%CODEBLOCK_(\d+)%%/g, (_, j) => codeBlocks[+j]);
 	}
 
+
 	async sendMessage(): Promise<void> {
 		const text = this.query.trim();
 		if (!text || this.selectedDocIds.length === 0) {
@@ -214,7 +250,7 @@ export class ChatComponent implements OnInit {
 		if (!this.sessionId) {
 			try {
 				const res: any = await firstValueFrom(
-					this.http.post(`${environment.apiBase}/chat_session/start`, {
+					this.http.post(`${environment.apiBase}/chat/start`, {
 						doc_ids: this.selectedDocIds,
 					})
 				);
@@ -236,7 +272,7 @@ export class ChatComponent implements OnInit {
 
 		try {
 			const res: any = await firstValueFrom(
-				this.http.post(`${environment.apiBase}/chat_session/continue`, {
+				this.http.post(`${environment.apiBase}/chat/continue`, {
 					session_id: this.sessionId,
 					query: text,
 				})
@@ -248,5 +284,145 @@ export class ChatComponent implements OnInit {
 		}
 
 		this.loading = false;
+	}
+
+	/**
+	 * Show status message to user
+	 */
+	private showStatus(message: string, type: 'success' | 'error' | 'info' = 'info'): void {
+		this.statusMessage = message;
+		this.statusType = type;
+
+		// Auto-hide after 5 seconds
+		setTimeout(() => {
+			this.statusMessage = '';
+			this.statusType = '';
+		}, 5000);
+	}
+
+	/**
+	 * Clear status message
+	 */
+	clearStatus(): void {
+		this.statusMessage = '';
+		this.statusType = '';
+	}
+
+	/**
+	 * Show confirmation dialog
+	 */
+	private showConfirmationDialog(title: string, message: string, action: () => void): void {
+		this.confirmTitle = title;
+		this.confirmMessage = message;
+		this.confirmAction = action;
+		this.showConfirmDialog = true;
+	}
+
+	/**
+	 * Handle confirmation dialog result
+	 */
+	handleConfirmation(confirmed: boolean): void {
+		if (confirmed && this.confirmAction) {
+			this.confirmAction();
+		}
+		this.showConfirmDialog = false;
+		this.confirmAction = null;
+	}
+
+	/**
+	 * Clear all chat sessions
+	 */
+	async clearAllSessions(): Promise<void> {
+		this.showConfirmationDialog(
+			'Clear All Sessions',
+			'Are you sure you want to clear all chat sessions? This action cannot be undone.',
+			async () => {
+				try {
+					await firstValueFrom(
+						this.http.post(`${environment.apiBase}/chat/clear_all_sessions`, {})
+					);
+
+					// Reset local state
+					this.sessionId = null;
+					this.activeSessionId = null;
+					this.messages = [];
+					this.sessionOptions = [];
+					localStorage.removeItem('activeSession');
+
+					// Reload session options to reflect changes
+					await this.loadSessionOptions();
+
+					this.showStatus('All chat sessions have been cleared successfully.', 'success');
+				} catch (err) {
+					console.error('Failed to clear all sessions:', err);
+					this.showStatus('Failed to clear all sessions. Please try again.', 'error');
+				}
+			}
+		);
+	}
+
+	/**
+	 * Clear messages for the current active session
+	 */
+	async clearCurrentSession(): Promise<void> {
+		if (!this.activeSessionId) {
+			this.showStatus('No active session to clear.', 'error');
+			return;
+		}
+
+		this.showConfirmationDialog(
+			'Clear Current Session',
+			'Are you sure you want to clear the current session messages? This action cannot be undone.',
+			async () => {
+				try {
+					await firstValueFrom(
+						this.http.post(`${environment.apiBase}/chat/clear_session/${this.activeSessionId}`, {})
+					);
+
+					// Clear local messages
+					this.messages = [];
+
+					this.showStatus('Current session messages have been cleared successfully.', 'success');
+				} catch (err) {
+					console.error('Failed to clear current session:', err);
+					this.showStatus('Failed to clear current session. Please try again.', 'error');
+				}
+			}
+		);
+	}
+
+	/**
+	 * Clear messages for a specific session
+	 */
+	async clearSpecificSession(sessionId: string): Promise<void> {
+		if (!sessionId) {
+			return;
+		}
+
+		const sessionDisplay = sessionId.slice(0, 8);
+		this.showConfirmationDialog(
+			'Clear Session',
+			`Are you sure you want to clear messages for session ${sessionDisplay}? This action cannot be undone.`,
+			async () => {
+				try {
+					await firstValueFrom(
+						this.http.post(`${environment.apiBase}/chat/clear_session/${sessionId}`, {})
+					);
+
+					// If it's the current active session, clear local messages
+					if (sessionId === this.activeSessionId) {
+						this.messages = [];
+					}
+
+					// Reload session options to reflect changes
+					await this.loadSessionOptions();
+
+					this.showStatus(`Session ${sessionDisplay} messages have been cleared successfully.`, 'success');
+				} catch (err) {
+					console.error('Failed to clear session:', err);
+					this.showStatus('Failed to clear session. Please try again.', 'error');
+				}
+			}
+		);
 	}
 }

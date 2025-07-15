@@ -271,7 +271,7 @@ def continue_chat_all_docs(data: dict = Body(...)):
     else:
         system_prompt = (
             "You are a helpful document context assistant. Answer ONLY using the information in the provided context below. "
-            "If the answer is not present in the context, reply with 'I don't know.'\n\nContext:\n" + context_text_final
+            "If the answer is not present in the context, reply with 'No relevant document found for your query.'\n\nContext:\n" + context_text_final
         )
         gpt_response = openai_client.chat.completions.create(
             model=os.getenv("OPENAI_MODEL", "gpt-3.5-turbo"),

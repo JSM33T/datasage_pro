@@ -2,6 +2,14 @@
 	<!-- Left Panel: Session + Search + Docs -->
 	<div class="col-md-4 h-100">
 		<div class="card shadow-sm p-3 h-100 d-flex flex-column">
+			<!-- Status Message -->
+			<div *ngIf="statusMessage" class="alert alert-dismissible fade show mb-3"
+				[class.alert-success]="statusType === 'success'" [class.alert-danger]="statusType === 'error'"
+				[class.alert-info]="statusType === 'info'">
+				{{ statusMessage }}
+				<button type="button" class="btn-close" (click)="clearStatus()" aria-label="Close"></button>
+			</div>
+
 			<!-- Session Selector -->
 			<div class="mb-3">
 				<label class="form-label">Choose Session</label>
@@ -16,14 +24,48 @@
 				</div>
 			</div>
 
+			<!-- Session List with Actions -->
+			<div class="mb-3" *ngIf="sessionOptions.length > 0">
+				<label class="form-label">Session Actions</label>
+				<div class="session-actions">
+					<div *ngFor="let session of sessionOptions"
+						class="list-group-item session-item session-list-item d-flex justify-content-between align-items-center"
+						[class.active]="session.id === activeSessionId">
+						<div class="flex-grow-1">
+							<div class="fw-bold">{{ session.id.slice(0, 8) }}</div>
+							<div class="text-muted small">{{ session.createdAt | date:'short' }}</div>
+							<div class="text-muted small" *ngIf="session.documents.length">
+								{{ getDocumentNames(session.documents) }}
+							</div>
+						</div>
+						<div class="d-flex gap-1">
+							<button class="btn btn-sm btn-outline-primary session-actions-btn"
+								(click)="loadSession(session.id)" [disabled]="session.id === activeSessionId"
+								title="Load session">
+								<i class="bi bi-play-fill"></i>
+							</button>
+							<button class="btn btn-sm btn-outline-warning session-actions-btn"
+								(click)="clearSpecificSession(session.id)" title="Clear session messages">
+								<i class="bi bi-trash"></i>
+							</button>
+						</div>
+					</div>
+				</div>
+			</div>
+
+			<!-- Session Management -->
 			<div class="mb-3">
-				<label class="form-label">Choose Session</label>
-				<select class="form-select" [ngModel]="activeSessionId" (ngModelChange)="loadSession($event)">
-					<option *ngFor="let s of sessionOptions" [value]="s.id">
-						{{ s.id.slice(0, 8) }} — {{ s.createdAt | date:'short' }}
-						<span *ngIf="s.documents.length"> [{{ getDocumentNames(s.documents) }}]</span>
-					</option>
-				</select>
+				<label class="form-label">Session Management</label>
+				<div class="d-flex session-management-buttons flex-wrap">
+					<button class="btn btn-sm btn-outline-warning" (click)="clearCurrentSession()"
+						[disabled]="!activeSessionId" title="Clear current session messages">
+						<i class="bi bi-trash"></i> Clear Current
+					</button>
+					<button class="btn btn-sm btn-outline-danger" (click)="clearAllSessions()"
+						[disabled]="sessionOptions.length === 0" title="Clear all chat sessions">
+						<i class="bi bi-trash-fill"></i> Clear All
+					</button>
+				</div>
 			</div>
 
 			<!-- Search Box -->
@@ -35,7 +77,7 @@
 
 			<!-- Document List -->
 			<div class="fw-semibold mb-2">Results</div>
-			<ul class="list-group overflow-auto flex-grow-1">
+			<ul class="list-group overflow-auto flex-grow-1" style="max-height: 40vh;">
 				<li class="list-group-item d-flex justify-content-between align-items-start"
 					*ngFor="let doc of visibleDocs">
 					<div class="me-2 flex-grow-1">
@@ -47,7 +89,8 @@
 						<input type="checkbox" class="form-check-input" [checked]="selectedDocIds.includes(doc.id)"
 							(input)="onCheckboxChange($event, doc.id)" />
 						<button type="button" class="btn btn-sm btn-outline-primary" (click)="togglePin(doc)"
-							[attr.aria-pressed]="isPinned(doc.id)">
+							[attr.aria-pressed]="isPinned(doc.id)" [disabled]="selectedDocIds.includes(doc.id)"
+							[title]="selectedDocIds.includes(doc.id) ? 'Uncheck to unpin' : (isPinned(doc.id) ? 'Unpin' : 'Pin')">
 							<i
 								[ngClass]="isPinned(doc.id) ? 'bi bi-pin-angle-fill text-primary' : 'bi bi-pin-angle text-muted'"></i>
 						</button>
@@ -90,3 +133,26 @@
 		</div>
 	</div>
 </div>
+
+<!-- Confirmation Dialog Modal -->
+<div class="modal fade" [class.show]="showConfirmDialog" [style.display]="showConfirmDialog ? 'block' : 'none'"
+	tabindex="-1" role="dialog" aria-labelledby="confirmModalLabel" aria-hidden="true">
+	<div class="modal-dialog" role="document">
+		<div class="modal-content">
+			<div class="modal-header">
+				<h5 class="modal-title" id="confirmModalLabel">{{ confirmTitle }}</h5>
+				<button type="button" class="btn-close" (click)="handleConfirmation(false)" aria-label="Close"></button>
+			</div>
+			<div class="modal-body">
+				{{ confirmMessage }}
+			</div>
+			<div class="modal-footer">
+				<button type="button" class="btn btn-secondary" (click)="handleConfirmation(false)">Cancel</button>
+				<button type="button" class="btn btn-danger" (click)="handleConfirmation(true)">Confirm</button>
+			</div>
+		</div>
+	</div>
+</div>
+
+<!-- Modal backdrop -->
+<div class="modal-backdrop fade" [class.show]="showConfirmDialog" *ngIf="showConfirmDialog"></div>
