@@ -52,33 +52,6 @@ def clear_session(session_id: str):
         return JSONResponse(status_code=404, content={"error": "Session not found"})
     return {"status": "success", "message": f"Session {session_id} messages cleared."}
 
-# === Get session details for UI compatibility ===
-@router.get("/get_session/{session_id}")
-def get_session(session_id: str):
-    chat = sessions.find_one({ "_id": session_id })
-    if not chat:
-        return JSONResponse(status_code=404, content={"error": "Session not found"})
-    return {
-        "session_id": chat["_id"],
-        "doc_ids": chat["doc_ids"],
-        "messages": chat["messages"]
-    }
-
-
-# === API: Clear all chat sessions ===
-@router.post("/clear_all_sessions")
-def clear_all_sessions():
-    sessions.delete_many({})
-    return {"status": "success", "message": "All chat sessions cleared."}
-
-# === API: Clear messages for a specific session ===
-@router.post("/clear_session/{session_id}")
-def clear_session(session_id: str):
-    result = sessions.update_one({"_id": session_id}, {"$set": {"messages": []}})
-    if result.matched_count == 0:
-        return JSONResponse(status_code=404, content={"error": "Session not found"})
-    return {"status": "success", "message": f"Session {session_id} messages cleared."}
-
 # === Embedding helper ===
 def get_embedding(text: str):
     response = openai_client.embeddings.create(
@@ -206,13 +179,19 @@ def continue_chat(data: dict = Body(...)):
     messages = chat["messages"]
     messages.append({ "role": "user", "content": query })
 
-    # Fetch context from FAISS + .pkl
+    # Fetch context from FAISS + .pkl - include recent conversation for better context retrieval
     doc_ids = chat.get("doc_ids", [])
-    context_text, doc_score = retrieve_context_from_faiss(doc_ids, query)
-
-    # Limit message history
-    MAX_MESSAGES = 10
-    messages = messages[-MAX_MESSAGES:]
+    
+    # Enhance query with recent conversation context for better retrieval
+    recent_messages = messages[-6:]  # Last 3 exchanges (user + assistant)
+    conversation_context = ""
+    if len(recent_messages) > 2:
+        conversation_context = " ".join([msg["content"] for msg in recent_messages[-4:]])
+        enhanced_query = f"{query} {conversation_context}"
+    else:
+        enhanced_query = query
+    
+    context_text, doc_score = retrieve_context_from_faiss(doc_ids, enhanced_query)
 
     # Strict anti-hallucination: if no context or all scores below threshold, reply "I don't know." except for greetings
     SIMILARITY_THRESHOLD = 0.75
@@ -224,10 +203,17 @@ def continue_chat(data: dict = Body(...)):
         else:
             reply = "I don't know."
     else:
+        # Create system prompt with current context
         system_prompt = (
-            "You are a helpful document context assistant. Answer ONLY using the information in the provided context below. "
+            "You are a helpful document context assistant. Answer using the information in the provided context below and maintain conversation continuity. "
+            "Reference previous parts of our conversation when relevant. "
             "If the answer is not present in the context, reply with 'No relevant document found for your query.'\n\nContext:\n" + context_text
         )
+        
+        # Limit message history but keep enough for context (increase to 20 messages)
+        MAX_MESSAGES = 20
+        conversation_messages = messages[-MAX_MESSAGES:]
+        
         gpt_response = openai_client.chat.completions.create(
             model=os.getenv("OPENAI_MODEL", "gpt-3.5-turbo"),
             messages=[
@@ -235,7 +221,7 @@ def continue_chat(data: dict = Body(...)):
                     "role": "system",
                     "content": system_prompt
                 },
-                *messages
+                *conversation_messages
             ]
         )
         reply = gpt_response.choices[0].message.content.strip()  # type: ignore
