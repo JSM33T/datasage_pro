@@ -27,6 +27,32 @@ import 'prismjs/components/prism-batch';
 	styleUrls: ['chat-component.css']
 })
 export class ChatComponent implements OnInit {
+	// Select all visible documents
+	areAllVisibleSelected(): boolean {
+		const visibleIds = this.visibleDocs.map((doc: any) => doc.id);
+		return visibleIds.length > 0 && visibleIds.every((id: string) => this.selectedDocIds.includes(id));
+	}
+
+	toggleSelectAllVisible(): void {
+		const visibleIds = this.visibleDocs.map((doc: any) => doc.id);
+		if (this.areAllVisibleSelected()) {
+			// Unselect all visible
+			this.selectedDocIds = this.selectedDocIds.filter((id: string) => !visibleIds.includes(id));
+			this.pinnedDocs = this.pinnedDocs.filter((doc: any) => !visibleIds.includes(doc.id));
+		} else {
+			// Select all visible
+			for (const id of visibleIds) {
+				if (!this.selectedDocIds.includes(id)) {
+					this.selectedDocIds.push(id);
+				}
+				// Auto-pin if not already pinned
+				const doc = [...this.searchResults, ...this.pinnedDocs].find((d: any) => d.id === id);
+				if (doc && !this.pinnedDocs.some((d: any) => d.id === id)) {
+					this.pinnedDocs.push(doc);
+				}
+			}
+		}
+	}
 	@ViewChild('chatWindow') chatWindowRef!: ElementRef;
 
 	searchTerm = '';
@@ -238,6 +264,7 @@ export class ChatComponent implements OnInit {
 		// Re-insert code blocks
 		return escaped.replace(/%%CODEBLOCK_(\d+)%%/g, (_, j) => codeBlocks[+j]);
 	}
+
 
 
 	async sendMessage(): Promise<void> {
