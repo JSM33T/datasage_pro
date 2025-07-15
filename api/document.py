@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 from pathlib import Path
-from fastapi import APIRouter, UploadFile, File, Form, Query
+from fastapi import APIRouter, UploadFile, File, Form, Query, Request
 from fastapi.responses import JSONResponse, FileResponse
 from dotenv import load_dotenv
 from pymongo import MongoClient
@@ -37,7 +37,10 @@ collection = db["documents"]
 
 
 @router.get("/search")
-def search_documents(query: str = Query(..., min_length=1)):
+def search_documents(query: str = Query(..., min_length=1), request: Request = None):
+    # User is authenticated through middleware, can access this endpoint
+    user_id = request.state.user.get('username') if request and hasattr(request, 'state') else None
+    
     # Case-insensitive regex search in name or filename first
     primary_results = list(collection.find(
         {
@@ -72,7 +75,10 @@ def search_documents(query: str = Query(..., min_length=1)):
 
 
 @router.get("/by_ids")
-def get_documents_by_ids(ids: str = Query(..., description="Comma-separated document IDs")):
+def get_documents_by_ids(ids: str = Query(..., description="Comma-separated document IDs"), request: Request = None):
+    # User is authenticated through middleware, can access this endpoint
+    user_id = request.state.user.get('username') if request and hasattr(request, 'state') else None
+    
     id_list = ids.split(",")
     docs = list(collection.find(
         {"_id": {"$in": id_list}},
@@ -88,8 +94,12 @@ def get_documents_by_ids(ids: str = Query(..., description="Comma-separated docu
 async def add_document(
     file: UploadFile = File(...),
     name: str = Form(...),
-    description: str = Form(...)
+    description: str = Form(...),
+    request: Request = None
 ):
+    # User is authenticated through middleware, admin access required
+    user_id = request.state.user.get('username') if request and hasattr(request, 'state') else None
+    
     try:
         allowed_ext = [".doc", ".docx", ".pdf"]
         ext = os.path.splitext(file.filename)[1].lower()
@@ -115,7 +125,8 @@ async def add_document(
             "description": description,
             "generatedSummary": "",
             "isIndexed": False,
-            "dateAdded": datetime.utcnow()
+            "dateAdded": datetime.utcnow(),
+            "uploaded_by": user_id  # Track who uploaded the document
         })
 
         return {
@@ -133,8 +144,11 @@ async def add_document(
 
 
 @router.post("/reindex")
-async def reindex_documents(data: dict = Body(...)):
+async def reindex_documents(data: dict = Body(...), request: Request = None):
     """Re-index already indexed documents"""
+    # User is authenticated through middleware, admin access required
+    user_id = request.state.user.get('username') if request and hasattr(request, 'state') else None
+    
     doc_ids = data.get("doc_ids", [])
     if not doc_ids:
         return JSONResponse(status_code=400, content={"error": "Missing doc_ids"})
@@ -148,11 +162,15 @@ async def reindex_documents(data: dict = Body(...)):
 
 
 @router.post("/add2")
-async def add_document(
+async def add_document_v2(
     file: UploadFile = File(...),
     name: str = Form(...),
-    description: str = Form(...)
+    description: str = Form(...),
+    request: Request = None
 ):
+    # User is authenticated through middleware, admin access required
+    user_id = request.state.user.get('username') if request and hasattr(request, 'state') else None
+    
     try:
         #  Check for duplicate
         if collection.find_one({"filename": file.filename}):
@@ -173,7 +191,8 @@ async def add_document(
             "description": description,
             "generatedSummary": "",
             "isIndexed": False,
-            "dateAdded": datetime.utcnow()
+            "dateAdded": datetime.utcnow(),
+            "uploaded_by": user_id  # Track who uploaded the document
         })
 
         return {
@@ -190,7 +209,10 @@ async def add_document(
 
 
 @router.post("/delete")
-def delete_doc(data: dict = Body(...)):
+def delete_doc(data: dict = Body(...), request: Request = None):
+    # User is authenticated through middleware, admin access required
+    user_id = request.state.user.get('username') if request and hasattr(request, 'state') else None
+    
     doc_id = data.get("doc_id")
     if not doc_id:
         return JSONResponse(status_code=400, content={"error": "Missing doc_id"})
@@ -215,7 +237,10 @@ def delete_doc(data: dict = Body(...)):
 #     return docs
 
 @router.get("/download/{doc_id}/{filename}")
-def download_document(doc_id: str, filename: str):
+def download_document(doc_id: str, filename: str, request: Request = None):
+    # User is authenticated through middleware, can access this endpoint
+    user_id = request.state.user.get('username') if request and hasattr(request, 'state') else None
+    
     doc_dir = RESOURCE_DIR / doc_id
     file_path = doc_dir / filename
     if not file_path.exists() or not file_path.is_file():
@@ -227,8 +252,12 @@ def download_document(doc_id: str, filename: str):
 def list_documents(
     page: int = Query(1, ge=1),
     page_size: int = Query(10, ge=1, le=100),
-    search: str = Query(None, description="Optional search by name")
+    search: str = Query(None, description="Optional search by name"),
+    request: Request = None
 ):
+    # User is authenticated through middleware, can access this endpoint
+    user_id = request.state.user.get('username') if request and hasattr(request, 'state') else None
+    
     skips = (page - 1) * page_size
 
     query_filter = {}

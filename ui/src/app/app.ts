@@ -13,7 +13,9 @@ import { Collapse } from 'bootstrap';
 })
 export class App {
 	token = signal(localStorage.getItem('token'));
+	username = signal('');
 	password = signal('');
+	domain = signal('');
 	role = signal(localStorage.getItem('role') || 'user');
 	loading = signal(false);
 	error = signal('');
@@ -37,19 +39,28 @@ export class App {
 
 	confirmLogout() {
 		localStorage.removeItem('token');
+		localStorage.removeItem('role');
 		this.router.navigateByUrl('/');
 		location.reload();
 	}
+
 	login() {
 		this.loading.set(true);
 		this.error.set('');
 
+		const loginData = {
+			username: this.username(),
+			password: this.password(),
+			domain: this.domain() || undefined  // Send undefined if empty
+		};
+
 		this.http
-			.post<any>(`${environment.apiBase}/auth/login`, { password: this.password() })
+			.post<any>(`${environment.apiBase}/auth/login`, loginData)
 			.subscribe({
 				next: (response) => {
 					localStorage.setItem('token', response.token);
 					localStorage.setItem('role', response.role);
+					localStorage.setItem('user', JSON.stringify(response.user));
 
 					this.token.set(response.token);
 					this.role.set(response.role);
@@ -59,16 +70,22 @@ export class App {
 				},
 				error: (err) => {
 					this.loading.set(false);
-					this.error.set(err.status === 401 ? 'Wrong password' : 'Login failed');
+					if (err.status === 401) {
+						this.error.set('Invalid credentials');
+					} else if (err.status === 400) {
+						this.error.set('Username and password are required');
+					} else {
+						this.error.set('Login failed. Please try again.');
+					}
 				},
 			});
 	}
 
-
 	logout() {
 		localStorage.removeItem('token');
+		localStorage.removeItem('role');
+		localStorage.removeItem('user');
 		this.token.set(null);
 		window.location.href = '/';
 	}
-
 }

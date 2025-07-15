@@ -1,7 +1,7 @@
 
 
 
-from fastapi import APIRouter, Body
+from fastapi import APIRouter, Body, Request
 from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
 from pymongo import MongoClient
@@ -27,27 +27,55 @@ openai_client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 # === Get session details for UI compatibility ===
 @router.get("/get_session/{session_id}")
-def get_session(session_id: str):
-    chat = sessions.find_one({ "_id": session_id })
+def get_session(session_id: str, request: Request):
+    user_id = request.state.user.get('username')  # Get user ID from JWT token
+    
+    # Find session by ID and ensure it belongs to the user
+    chat = sessions.find_one({ "_id": session_id, "user_id": user_id })
     if not chat:
         return JSONResponse(status_code=404, content={"error": "Session not found"})
+    
+    # Get document metadata with download links
+    documents = db["documents"]
+    doc_ids = chat.get("doc_ids", [])
+    doc_meta = list(documents.find(
+        { "_id": { "$in": doc_ids } },
+        { "_id": 1, "name": 1, "filename": 1 }
+    ))
+    
+    # Add download links to documents
+    for doc in doc_meta:
+        doc["download_link"] = f"/api/document/download/{doc['_id']}/{doc['filename']}"
+        doc["id"] = str(doc["_id"])
+        del doc["_id"]
+    
     return {
         "session_id": chat["_id"],
         "doc_ids": chat["doc_ids"],
+        "documents": doc_meta,
         "messages": chat["messages"]
     }
 
 
 # === API: Clear all chat sessions ===
 @router.post("/clear_all_sessions")
-def clear_all_sessions():
-    sessions.delete_many({})
-    return {"status": "success", "message": "All chat sessions cleared."}
+def clear_all_sessions(request: Request):
+    user_id = request.state.user.get('username')  # Get user ID from JWT token
+    
+    # Only clear sessions belonging to the user
+    result = sessions.delete_many({"user_id": user_id})
+    return {"status": "success", "message": f"Cleared {result.deleted_count} chat sessions for user {user_id}."}
 
 # === API: Clear messages for a specific session ===
 @router.post("/clear_session/{session_id}")
-def clear_session(session_id: str):
-    result = sessions.update_one({"_id": session_id}, {"$set": {"messages": []}})
+def clear_session(session_id: str, request: Request):
+    user_id = request.state.user.get('username')  # Get user ID from JWT token
+    
+    # Only clear if session belongs to the user
+    result = sessions.update_one(
+        {"_id": session_id, "user_id": user_id}, 
+        {"$set": {"messages": []}}
+    )
     if result.matched_count == 0:
         return JSONResponse(status_code=404, content={"error": "Session not found"})
     return {"status": "success", "message": f"Session {session_id} messages cleared."}
@@ -111,8 +139,11 @@ def retrieve_context_from_faiss(doc_ids, query, top_k=3):
 
 # === API: List sessions (excluding master/all-docs session) ===
 @router.get("/list_sessions")
-def list_sessions():
-    all_sessions = sessions.find({}, {"_id": 1, "doc_ids": 1, "createdAt": 1})
+def list_sessions(request: Request):
+    user_id = request.state.user.get('username')  # Get user ID from JWT token
+    
+    # Get only sessions for the current user
+    all_sessions = sessions.find({"user_id": user_id}, {"_id": 1, "doc_ids": 1, "createdAt": 1})
     documents = db["documents"]
 
     enriched_sessions = []
@@ -126,6 +157,12 @@ def list_sessions():
             { "_id": { "$in": doc_ids } },
             { "_id": 1, "name": 1, "filename": 1 }
         ))
+        # Add download links to documents
+        for doc in doc_meta:
+            doc["download_link"] = f"/api/document/download/{doc['_id']}/{doc['filename']}"
+            doc["id"] = str(doc["_id"])
+            del doc["_id"]
+        
         enriched_sessions.append({
             "id": s["_id"],
             "createdAt": s.get("createdAt"),
@@ -136,7 +173,8 @@ def list_sessions():
 
 # === API: Start chat session with selected docs ===
 @router.post("/start")
-def start_chat(data: dict = Body(...)):
+def start_chat(data: dict = Body(...), request: Request = None):
+    user_id = request.state.user.get('username')  # Get user ID from JWT token
     doc_ids = data.get("doc_ids")
     if not doc_ids:
         return JSONResponse(status_code=400, content={"error": "doc_ids required"})
@@ -144,6 +182,7 @@ def start_chat(data: dict = Body(...)):
     session_id = str(uuid4())
     sessions.insert_one({
         "_id": session_id,
+        "user_id": user_id,  # Associate session with user
         "doc_ids": doc_ids,
         "messages": [],
         "createdAt": datetime.utcnow()
@@ -154,6 +193,12 @@ def start_chat(data: dict = Body(...)):
         { "_id": { "$in": new_session.get("doc_ids", []) } }, # type: ignore
         { "_id": 1, "name": 1, "filename": 1 }
     ))
+    
+    # Add download links to documents
+    for doc in doc_meta:
+        doc["download_link"] = f"/api/document/download/{doc['_id']}/{doc['filename']}"
+        doc["id"] = str(doc["_id"])
+        del doc["_id"]
 
     return {
         "session_id": session_id,
@@ -166,13 +211,15 @@ def start_chat(data: dict = Body(...)):
 
 # === API: Continue chat in a session ===
 @router.post("/continue")
-def continue_chat(data: dict = Body(...)):
+def continue_chat(data: dict = Body(...), request: Request = None):
+    user_id = request.state.user.get('username')  # Get user ID from JWT token
     session_id = data.get("session_id")
     query = data.get("query")
     if not session_id or not query:
         return JSONResponse(status_code=400, content={"error": "session_id and query required"})
 
-    chat = sessions.find_one({ "_id": session_id })
+    # Find session by ID and ensure it belongs to the user
+    chat = sessions.find_one({ "_id": session_id, "user_id": user_id })
     if not chat:
         return JSONResponse(status_code=404, content={"error": "Session not found"})
 
@@ -227,7 +274,7 @@ def continue_chat(data: dict = Body(...)):
         reply = gpt_response.choices[0].message.content.strip()  # type: ignore
 
     messages.append({ "role": "assistant", "content": reply })
-    sessions.update_one({ "_id": session_id }, { "$set": { "messages": messages } })
+    sessions.update_one({ "_id": session_id, "user_id": user_id }, { "$set": { "messages": messages } })
 
     # Sort docs by relevance score
     sorted_docs = sorted(doc_score.items(), key=lambda x: x[1], reverse=True)
@@ -245,6 +292,7 @@ def continue_chat(data: dict = Body(...)):
             "doc_id": str(doc_id),
             "doc_name": doc_map.get(str(doc_id), {}).get("name", ""),
             "link": f"/resources/{doc_id}/{doc_map.get(str(doc_id), {}).get('filename', '')}",
+            "download_link": f"/api/document/download/{doc_id}/{doc_map.get(str(doc_id), {}).get('filename', '')}",
             "score": doc_score[doc_id]
         }
         for doc_id in top_doc_ids if str(doc_id) in doc_map

@@ -129,6 +129,7 @@ export class Document implements OnInit {
 	indexingDocId = signal<string | null>(null);
 	search = signal('');
 	documents = signal<any[]>([]);
+	role = localStorage.getItem('role') || 'user';
 
 	uploadForm = this.fb.group({
 		name: '',

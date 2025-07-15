@@ -16,9 +16,11 @@
 								<i class="bi bi-file-earmark-text me-1"></i> Home
 							</a>
 						</li>
-						<li class="nav-item" *ngIf="role() === 'admin'">
+						<li class="nav-item">
 							<a class="nav-link" routerLink="documents">
-								<i class="bi bi-file-earmark-text me-1"></i> Document
+								<i class="bi bi-file-earmark-text me-1"></i>
+								<span *ngIf="role() === 'superadmin'">Document Management</span>
+								<span *ngIf="role() !== 'superadmin'">Documents</span>
 							</a>
 						</li>
 
@@ -52,12 +54,48 @@
 
 <ng-template #loginScreen>
 	<div class="d-flex flex-column justify-content-center align-items-center vh-100 bg-light text-center px-3">
-		<h2 class="mb-4">Enter Access Key</h2>
-		<input class="form-control mb-3 text-center" type="password" [value]="password()"
-			(input)="password.set($any($event.target).value)" (keydown.enter)="login()" placeholder="Password"
-			style="max-width: 320px;" />
-		<button class="btn btn-primary" (click)="login()" [disabled]="loading()">Login</button>
-		<div class="text-danger mt-3" *ngIf="error()">{{ error() }}</div>
+		<div class="card shadow-lg" style="max-width: 400px; width: 100%;">
+			<div class="card-header bg-primary text-white">
+				<h4 class="mb-0">LDAP Authentication</h4>
+			</div>
+			<div class="card-body">
+				<div class="mb-3">
+					<label class="form-label">Username</label>
+					<input class="form-control" type="text" [value]="username()"
+						(input)="username.set($any($event.target).value)" (keydown.enter)="login()"
+						placeholder="Enter username" [disabled]="loading()" />
+				</div>
+				<div class="mb-3">
+					<label class="form-label">Password</label>
+					<input class="form-control" type="password" [value]="password()"
+						(input)="password.set($any($event.target).value)" (keydown.enter)="login()"
+						placeholder="Enter password" [disabled]="loading()" />
+				</div>
+				<div class="mb-3">
+					<label class="form-label">Domain (Optional)</label>
+					<input class="form-control" type="text" [value]="domain()"
+						(input)="domain.set($any($event.target).value)" (keydown.enter)="login()"
+						placeholder="Leave empty for default domain" [disabled]="loading()" />
+				</div>
+				<button class="btn btn-primary w-100" (click)="login()"
+					[disabled]="loading() || !username() || !password()">
+					<span *ngIf="loading()" class="spinner-border spinner-border-sm me-2"></span>
+					{{ loading() ? 'Authenticating...' : 'Login' }}
+				</button>
+				<div class="alert alert-danger mt-3" *ngIf="error()">
+					{{ error() }}
+				</div>
+
+				<!-- Demo Accounts Info -->
+				<div class="mt-3 p-3 bg-light rounded">
+					<h6 class="mb-2">Demo Accounts:</h6>
+					<small class="text-muted">
+						<strong>SuperAdmin:</strong> superadmin / superadmin123<br>
+						<strong>User:</strong> demouser / user123
+					</small>
+				</div>
+			</div>
+		</div>
 	</div>
 </ng-template>
 

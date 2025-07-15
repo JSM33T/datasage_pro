@@ -1,7 +1,7 @@
 <div class="row g-4">
 
-	<!-- Upload Document Card -->
-	<div class="col-md-6">
+	<!-- Upload Document Card - Only for SuperAdmin -->
+	<div class="col-md-6" *ngIf="role === 'superadmin'">
 		<div class="card shadow-sm p-4 h-100">
 			<h5 class="card-title mb-4">
 				<i class="bi bi-cloud-upload me-2"></i>Upload Document
@@ -44,11 +44,20 @@
 	</div>
 
 	<!-- Uploaded Documents Card -->
-	<div class="col-md-6">
+	<div [class]="role === 'superadmin' ? 'col-md-6' : 'col-md-8 offset-md-2'">
 		<div class="card shadow-sm p-4 h-100">
 			<h5 class="card-title mb-3">
-				<i class="bi bi-folder2 me-2"></i>Uploaded Documents
+				<i class="bi bi-folder2 me-2"></i>
+				<span *ngIf="role === 'superadmin'">Uploaded Documents</span>
+				<span *ngIf="role !== 'superadmin'">Available Documents</span>
 			</h5>
+
+			<!-- Access Level Notice for Non-SuperAdmin -->
+			<div *ngIf="role !== 'superadmin'" class="alert alert-info mb-3">
+				<i class="bi bi-info-circle me-2"></i>
+				<strong>Read-Only Access:</strong> You can view and download documents. Contact your administrator to
+				upload new documents.
+			</div>
 
 			<!-- Search Input -->
 			<div class="mb-4">
@@ -85,8 +94,8 @@
 								</div>
 								<div class="col-lg-4 col-md-5 col-12">
 									<div class="btn-group-sm d-flex gap-1 justify-content-end" role="group">
-										<!-- Index/Reindex Button -->
-										<button class="btn btn-sm"
+										<!-- Index/Reindex Button - Only for SuperAdmin -->
+										<button *ngIf="role === 'superadmin'" class="btn btn-sm"
 											[class]="doc.isIndexed ? 'btn-outline-warning' : 'btn-outline-success'"
 											[disabled]="indexingDocId() === doc.id"
 											[title]="doc.isIndexed ? 'Re-index document' : 'Index document'"
@@ -98,15 +107,15 @@
 												aria-hidden="true"></span>
 										</button>
 
-										<!-- Download Button -->
+										<!-- Download Button - Available for all users -->
 										<button class="btn btn-sm btn-outline-primary" (click)="download(doc)"
 											title="Download document">
 											<i class="bi bi-download"></i>
 										</button>
 
-										<!-- Delete Button -->
-										<button class="btn btn-sm btn-outline-danger" (click)="delete(doc.id)"
-											title="Delete document">
+										<!-- Delete Button - Only for SuperAdmin -->
+										<button *ngIf="role === 'superadmin'" class="btn btn-sm btn-outline-danger"
+											(click)="delete(doc.id)" title="Delete document">
 											<i class="bi bi-trash"></i>
 										</button>
 									</div>
