@@ -11,6 +11,7 @@ from datetime import datetime
 
 from api import chat_session, document, chat, indexing
 from api.ldap_auth import ldap_authenticator
+from api.api_auth import api_authenticator
 
 app = FastAPI()
 
@@ -29,12 +30,13 @@ async def login(payload: dict = Body(...)):
     username = payload.get("username")
     password = payload.get("password")
     domain = payload.get("domain")  # Optional, will use default if not provided
+    auth_type = payload.get("auth_type", "ldap")  # Default to LDAP, can be "api" for API auth
     
     if not username or not password:
         raise HTTPException(status_code=400, detail="Username and password are required")
     
     try:
-        print(f"Authentication request for user: {username}")
+        print(f"Authentication request for user: {username} using {auth_type} authentication")
         
         # Check for hardcoded demo accounts first
         if username == "superadmin" and password == "superadmin123":
@@ -76,6 +78,26 @@ async def login(payload: dict = Body(...)):
             return {
                 "success": True,
                 "message": "Authentication successful for demo user",
+                "user": user_details,
+                "token": token,
+                "role": role
+            }
+        
+        elif auth_type == "api":
+            # Try API authentication
+            user_details = api_authenticator.authenticate_user(username, password)
+            
+            # Generate JWT token
+            token = api_authenticator.generate_jwt_token(user_details)
+            
+            # Determine role based on user details or default to user
+            role = "user"  # You can implement role logic based on API response
+            
+            print(f"API authentication successful for {username}")
+            
+            return {
+                "success": True,
+                "message": "Authentication successful via API",
                 "user": user_details,
                 "token": token,
                 "role": role
@@ -123,6 +145,19 @@ async def test_ldap_connection():
         raise HTTPException(status_code=500, detail=f"Connection test failed: {str(error)}")
 
 
+# ===== Test API connection endpoint =====
+@app.get("/api/auth/test-api-connection")
+async def test_api_connection():
+    try:
+        result = api_authenticator.test_connection()
+        if result['success']:
+            return result
+        else:
+            raise HTTPException(status_code=500, detail=result['message'])
+    except Exception as error:
+        raise HTTPException(status_code=500, detail=f"API connection test failed: {str(error)}")
+
+
 # ===== Health check endpoint =====
 @app.get("/api/health")
 async def health_check():
@@ -140,7 +175,7 @@ async def auth_middleware(request: Request, call_next):
     auth_header = request.headers.get("Authorization")
     
     # Skip authentication for static files and login endpoints
-    if path.startswith("/resources") or path.startswith("/static") or path.startswith("/api/auth/login") or path.startswith("/api/auth/test-connection") or path.startswith("/api/health"):
+    if path.startswith("/resources") or path.startswith("/static") or path.startswith("/api/auth/login") or path.startswith("/api/auth/test-connection") or path.startswith("/api/auth/test-api-connection") or path.startswith("/api/health"):
         return await call_next(request)
     
     # Check for JWT token in Authorization header
@@ -148,7 +183,20 @@ async def auth_middleware(request: Request, call_next):
         try:
             # Extract token from Bearer header
             token = auth_header.replace("Bearer ", "")
-            user_payload = ldap_authenticator.verify_jwt_token(token)
+            
+            # Try to verify token with LDAP authenticator first
+            user_payload = None
+            try:
+                user_payload = ldap_authenticator.verify_jwt_token(token)
+            except:
+                # If LDAP token verification fails, try API authenticator
+                try:
+                    user_payload = api_authenticator.verify_jwt_token(token)
+                except:
+                    raise Exception("Invalid token format")
+            
+            if not user_payload:
+                raise Exception("Token verification failed")
             
             # Add user info to request state
             request.state.user = user_payload

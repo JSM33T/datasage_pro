@@ -16,6 +16,7 @@ export class App {
 	username = signal('');
 	password = signal('');
 	domain = signal('');
+	authType = signal('ldap'); // Default to LDAP
 	role = signal(localStorage.getItem('role') || 'user');
 	loading = signal(false);
 	error = signal('');
@@ -51,7 +52,8 @@ export class App {
 		const loginData = {
 			username: this.username(),
 			password: this.password(),
-			domain: this.domain() || undefined  // Send undefined if empty
+			domain: this.domain() || undefined,  // Send undefined if empty
+			auth_type: this.authType() // Add authentication type
 		};
 
 		this.http
