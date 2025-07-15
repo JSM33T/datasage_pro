@@ -28,3 +28,8 @@
 		max-width: 50%;
 	}
 }
+
+.ovf {
+	overflow: scroll;
+	max-height: 500px;
+}
