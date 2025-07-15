@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 from pathlib import Path
-from fastapi import APIRouter, UploadFile, File, Form,Query
+from fastapi import APIRouter, UploadFile, File, Form, Query
 from fastapi.responses import JSONResponse, FileResponse
 from dotenv import load_dotenv
 from pymongo import MongoClient
@@ -20,7 +20,7 @@ RESOURCE_DIR.mkdir(exist_ok=True)
 
 # Mongo setup
 client = MongoClient(os.getenv("MONGO_URI"))
-db = client[os.getenv("MONGO_DB")] # type: ignore
+db = client[os.getenv("MONGO_DB")]  # type: ignore
 collection = db["documents"]
 
 # Ensure text index exists
@@ -32,8 +32,9 @@ collection.create_index([
 
 # Mongo setup
 client = MongoClient(os.getenv("MONGO_URI"))
-db = client[os.getenv("MONGO_DB")] # type: ignore
+db = client[os.getenv("MONGO_DB")]  # type: ignore
 collection = db["documents"]
+
 
 @router.get("/search")
 def search_documents(query: str = Query(..., min_length=1)):
@@ -69,6 +70,7 @@ def search_documents(query: str = Query(..., min_length=1)):
 
     return process_docs(secondary_results)
 
+
 @router.get("/by_ids")
 def get_documents_by_ids(ids: str = Query(..., description="Comma-separated document IDs")):
     id_list = ids.split(",")
@@ -80,7 +82,8 @@ def get_documents_by_ids(ids: str = Query(..., description="Comma-separated docu
         doc["id"] = str(doc["_id"])
         del doc["_id"]
     return docs
- 
+
+
 @router.post("/add")
 async def add_document(
     file: UploadFile = File(...),
@@ -128,6 +131,22 @@ async def add_document(
         return JSONResponse(status_code=500, content={"error": str(e)})
 
 
+
+@router.post("/reindex")
+async def reindex_documents(data: dict = Body(...)):
+    """Re-index already indexed documents"""
+    doc_ids = data.get("doc_ids", [])
+    if not doc_ids:
+        return JSONResponse(status_code=400, content={"error": "Missing doc_ids"})
+
+    # Import here to avoid circular imports
+    from .indexing import index_document
+
+    # Call the existing index_document function
+    result = await index_document({"doc_ids": doc_ids})
+    return result
+
+
 @router.post("/add2")
 async def add_document(
     file: UploadFile = File(...),
@@ -143,7 +162,7 @@ async def add_document(
         doc_dir = RESOURCE_DIR / doc_id
         doc_dir.mkdir(parents=True, exist_ok=True)
 
-        file_path = doc_dir / file.filename # type: ignore
+        file_path = doc_dir / file.filename  # type: ignore
         with open(file_path, "wb") as f:
             f.write(await file.read())
 
@@ -169,6 +188,7 @@ async def add_document(
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
 
+
 @router.post("/delete")
 def delete_doc(data: dict = Body(...)):
     doc_id = data.get("doc_id")
@@ -186,7 +206,6 @@ def delete_doc(data: dict = Body(...)):
     return {"status": "deleted", "id": doc_id}
 
 
-
 # @router.get("/list2")
 # def list_documents():
 #     docs = list(collection.find({}, {"_id": 1, "name": 1, "filename": 1, "isIndexed": 1, "description": 1, "generatedSummary": 1, "dateAdded": 1}))
@@ -202,6 +221,7 @@ def download_document(doc_id: str, filename: str):
     if not file_path.exists() or not file_path.is_file():
         return JSONResponse(status_code=404, content={"error": "File not found"})
     return FileResponse(str(file_path), filename=filename)
+
 
 @router.get("/list")
 def list_documents(
@@ -228,3 +248,4 @@ def list_documents(
         del doc["_id"]
 
     return {"items": docs, "total": total, "page": page, "page_size": page_size}
+

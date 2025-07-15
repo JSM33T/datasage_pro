@@ -13,7 +13,108 @@ import * as bootstrap from 'bootstrap';
 		CommonModule,
 		ReactiveFormsModule
 	],
-	templateUrl: './document.html'
+	templateUrl: './document.html',
+	styles: [`
+		.description-text {
+			display: -webkit-box;
+			-webkit-line-clamp: 2;
+			-webkit-box-orient: vertical;
+			overflow: hidden;
+			text-overflow: ellipsis;
+			line-height: 1.4;
+			max-height: 2.8em;
+			font-size: 0.9rem;
+		}
+		
+	   .card {
+		   border: 1px solid #e9ecef;
+		   border-radius: 4px;
+	   }
+	   
+	   /* Remove card hover animation and extra shadow */
+		
+		.card-title {
+			color: #495057;
+			font-size: 1rem;
+		}
+		
+		.btn-group-sm .btn {
+			min-width: 40px;
+			height: 32px;
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			border-radius: 6px;
+			transition: all 0.2s ease;
+		}
+		
+		.btn-group-sm .btn:hover {
+			transform: translateY(-1px);
+		}
+		
+		.btn-group-sm .btn i {
+			font-size: 14px;
+		}
+		
+		.badge {
+			font-size: 0.75rem;
+			padding: 0.25em 0.5em;
+		}
+		
+		.card-title i {
+			opacity: 0.7;
+		}
+		
+		@media (max-width: 768px) {
+			.btn-group-sm {
+				flex-direction: column !important;
+				width: 100%;
+				gap: 0.25rem !important;
+			}
+			
+			.btn-group-sm .btn {
+				width: 100%;
+				min-width: auto;
+			}
+			
+			.col-lg-4.col-md-5.col-12 {
+				margin-top: 1rem;
+			}
+		}
+		
+		@media (min-width: 769px) {
+			.btn-group-sm {
+				flex-direction: row;
+			}
+		}
+		
+		.pagination .page-link {
+			color: #6c757d;
+			border: 1px solid #dee2e6;
+			padding: 0.5rem 0.75rem;
+		}
+		
+		.pagination .page-link:hover {
+			background-color: #e9ecef;
+			border-color: #dee2e6;
+		}
+		
+		.pagination .page-link i {
+			font-size: 0.9rem;
+		}
+		
+		.pagination .page-item.active .page-link {
+			background-color: #0d6efd;
+			border-color: #0d6efd;
+			color: white;
+		}
+		
+		.pagination .page-item.disabled .page-link {
+			color: #6c757d;
+			background-color: #fff;
+			border-color: #dee2e6;
+		}
+	`]
 })
 export class Document implements OnInit {
 	private readonly http = inject(HttpClient);
@@ -41,6 +142,11 @@ export class Document implements OnInit {
 	}
 	get totalPages(): number {
 		return Math.ceil(this.totalDocs() / this.pageSize);
+	}
+
+	// Helper method for pagination display
+	getEndIndex(): number {
+		return Math.min(this.currentPage() * this.pageSize, this.totalDocs());
 	}
 
 	// Fetch documents with pagination and search
@@ -102,6 +208,34 @@ export class Document implements OnInit {
 		} catch (error) {
 			console.error('Indexing failed:', error);
 			this.showToast('Indexing failed.', true);
+		}
+		this.indexingDocId.set(null);
+	}
+
+	// Reindex a document
+	async reindexDoc(docId: string): Promise<void> {
+		this.indexingDocId.set(docId);
+		const adminToken = localStorage.getItem('token') || '';
+		try {
+			const response: any = await firstValueFrom(
+				this.http.post(
+					`${this.API}/document/reindex`,
+					{ doc_ids: [docId] },
+					{ headers: { Authorization: adminToken } }
+				)
+			);
+
+			const result = response?.results?.find((r: any) => r.id === docId);
+
+			if (result?.status === 'indexed') {
+				await this.fetchDocs();
+				this.showToast('Document re-indexed successfully.');
+			} else {
+				this.showToast(`Re-indexing status: ${result?.status || 'unknown'}`, true);
+			}
+		} catch (error) {
+			console.error('Re-indexing failed:', error);
+			this.showToast('Re-indexing failed.', true);
 		}
 		this.indexingDocId.set(null);
 	}
