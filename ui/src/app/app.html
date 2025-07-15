@@ -64,8 +64,8 @@
 					<label class="form-label">Authentication Type</label>
 					<select class="form-select" [value]="authType()" (change)="authType.set($any($event.target).value)"
 						[disabled]="loading()">
-						<option value="ldap">LDAP Authentication</option>
 						<option value="api">API Authentication</option>
+						<option value="ldap">LDAP Authentication</option>
 					</select>
 				</div>
 				<div class="mb-3">

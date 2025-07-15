@@ -16,7 +16,7 @@ export class App {
 	username = signal('');
 	password = signal('');
 	domain = signal('');
-	authType = signal('ldap'); // Default to LDAP
+	authType = signal('api'); // Default to API
 	role = signal(localStorage.getItem('role') || 'user');
 	loading = signal(false);
 	error = signal('');

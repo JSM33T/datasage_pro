@@ -30,7 +30,7 @@ async def login(payload: dict = Body(...)):
     username = payload.get("username")
     password = payload.get("password")
     domain = payload.get("domain")  # Optional, will use default if not provided
-    auth_type = payload.get("auth_type", "ldap")  # Default to LDAP, can be "api" for API auth
+    auth_type = payload.get("auth_type", "api")  # Default to API, can be "ldap" for LDAP auth
     
     if not username or not password:
         raise HTTPException(status_code=400, detail="Username and password are required")
@@ -83,8 +83,8 @@ async def login(payload: dict = Body(...)):
                 "role": role
             }
         
-        elif auth_type == "api":
-            # Try API authentication
+        elif auth_type == "api" or auth_type is None:
+            # Try API authentication (default)
             user_details = api_authenticator.authenticate_user(username, password)
             
             # Generate JWT token
@@ -103,7 +103,7 @@ async def login(payload: dict = Body(...)):
                 "role": role
             }
         
-        else:
+        elif auth_type == "ldap":
             # Try LDAP authentication for other users
             user_details = ldap_authenticator.authenticate_with_directory_searcher(
                 username=username, 
