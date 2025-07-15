@@ -161,64 +161,130 @@ async def index_document(data: dict = Body(...)):
             chunks = chunk_text(text)
             # Remove empty/very short chunks
             chunks = [c for c in chunks if c and len(c.strip()) > 10]
+            # Ensure chunks do not exceed model's maximum context length
+            MAX_CONTEXT_TOKENS = 8192
+            refined_chunks = []
+            for c in chunks:
+                token_count = len(encoding.encode(c))
+                if token_count > MAX_CONTEXT_TOKENS:
+                    # Split large chunk into smaller ones
+                    subchunks = chunk_text(c)
+                    refined_chunks.extend(subchunks)
+                else:
+                    refined_chunks.append(c)
+            chunks = refined_chunks
+            
+            # Iteratively split chunks to ensure no chunk exceeds MAX_CONTEXT_TOKENS
+            def split_chunks(chunks_list):
+                queue = list(chunks_list)
+                result = []
+                while queue:
+                    txt = queue.pop(0)
+                    if len(encoding.encode(txt)) > MAX_CONTEXT_TOKENS:
+                        # split oversized chunk into smaller parts
+                        parts = chunk_text(txt, max_tokens=MAX_CONTEXT_TOKENS, overlap=50)
+                        queue.extend(parts)
+                    else:
+                        result.append(txt)
+                return result
+            chunks = split_chunks(chunks)
+
             if not chunks:
                 results.append({"id": doc_id, "status": "no_valid_chunks"})
                 continue
 
+            # Embed chunks, ensuring no text exceeds model's maximum context length
             embeddings = []
             embedding_dim = None
+            embedding_error = False
             for chunk in chunks:
-                try:
-                    emb = get_embedding(chunk)
-                    if embedding_dim is None:
-                        embedding_dim = len(emb)
-                    elif len(emb) != embedding_dim:
-                        results.append({"id": doc_id, "status": "embedding_dim_mismatch"})
-                        break
-                    embeddings.append(emb)
-                except Exception as e:
-                    results.append({"id": doc_id, "status": "embedding_error", "detail": str(e)})
+                # Split oversized chunks into manageable parts
+                token_count = len(encoding.encode(chunk))
+                parts = [chunk]
+                if token_count > MAX_CONTEXT_TOKENS:
+                    parts = chunk_text(chunk, max_tokens=MAX_CONTEXT_TOKENS, overlap=50)
+                # Embed each part
+                for part in parts:
+                    try:
+                        emb = get_embedding(part)
+                        # Validate embedding dimension
+                        if embedding_dim is None:
+                            embedding_dim = len(emb)
+                        elif len(emb) != embedding_dim:
+                            results.append({"id": doc_id, "status": "embedding_dim_mismatch"})
+                            embedding_error = True
+                            break
+                        embeddings.append(emb)
+                    except Exception as e:
+                        err_msg = str(e)
+                        # If still too long, further split and retry
+                        if "maximum context length" in err_msg:
+                            subparts = chunk_text(part, max_tokens=MAX_CONTEXT_TOKENS // 2, overlap=50)
+                            for sub in subparts:
+                                try:
+                                    emb2 = get_embedding(sub)
+                                    if embedding_dim is None:
+                                        embedding_dim = len(emb2)
+                                    elif len(emb2) != embedding_dim:
+                                        results.append({"id": doc_id, "status": "embedding_dim_mismatch"})
+                                        embedding_error = True
+                                        break
+                                    embeddings.append(emb2)
+                                except Exception as ee:
+                                    results.append({"id": doc_id, "status": "embedding_error", "detail": str(ee)})
+                                    embedding_error = True
+                                    break
+                            if embedding_error:
+                                break
+                            # move to next part after handling subparts
+                            continue
+                        else:
+                            results.append({"id": doc_id, "status": "embedding_error", "detail": err_msg})
+                            embedding_error = True
+                            break
+                if embedding_error:
                     break
-            else:
-                if not embeddings:
-                    results.append({"id": doc_id, "status": "no_embeddings"})
-                    continue
+            # If embedding failed or no embeddings generated, skip document
+            if embedding_error or not embeddings:
+                status = "no_embeddings" if not embeddings else "embedding_error"
+                results.append({"id": doc_id, "status": status})
+                continue
 
-                embedding = np.array(embeddings, dtype="float32")
-                # Create FAISS index
-                try:
-                    dim = embedding.shape[1]
-                    index = faiss.IndexFlatL2(dim)
-                    index.add(embedding)
-                except Exception as e:
-                    results.append({"id": doc_id, "status": "faiss_error", "detail": str(e)})
-                    continue
+            embedding = np.array(embeddings, dtype="float32")
+            # Create FAISS index
+            try:
+                dim = embedding.shape[1]
+                index = faiss.IndexFlatL2(dim)
+                index.add(embedding)
+            except Exception as e:
+                results.append({"id": doc_id, "status": "faiss_error", "detail": str(e)})
+                continue
 
-                # Atomic write: write to temp then move
-                try:
-                    faiss_tmp = doc_dir / f"{doc_id}.faiss.tmp"
-                    faiss_final = doc_dir / f"{doc_id}.faiss"
-                    faiss.write_index(index, str(faiss_tmp))
-                    os.replace(faiss_tmp, faiss_final)
-                    pkl_tmp = doc_dir / f"{doc_id}.pkl.tmp"
-                    pkl_final = doc_dir / f"{doc_id}.pkl"
-                    with open(pkl_tmp, "wb") as f:
-                        pickle.dump({"text": chunks, "filename": record["filename"]}, f)
-                    os.replace(pkl_tmp, pkl_final)
-                except Exception as e:
-                    # Clean up temp files
-                    for f in [faiss_tmp, pkl_tmp]:
-                        try:
-                            if f.exists():
-                                f.unlink()
-                        except Exception:
-                            pass
-                    results.append({"id": doc_id, "status": "atomic_write_error", "detail": str(e)})
-                    continue
+            # Atomic write: write to temp then move
+            try:
+                faiss_tmp = doc_dir / f"{doc_id}.faiss.tmp"
+                faiss_final = doc_dir / f"{doc_id}.faiss"
+                faiss.write_index(index, str(faiss_tmp))
+                os.replace(faiss_tmp, faiss_final)
+                pkl_tmp = doc_dir / f"{doc_id}.pkl.tmp"
+                pkl_final = doc_dir / f"{doc_id}.pkl"
+                with open(pkl_tmp, "wb") as f:
+                    pickle.dump({"text": chunks, "filename": record["filename"]}, f)
+                os.replace(pkl_tmp, pkl_final)
+            except Exception as e:
+                # Clean up temp files
+                for f in [faiss_tmp, pkl_tmp]:
+                    try:
+                        if f.exists():
+                            f.unlink()
+                    except Exception:
+                        pass
+                results.append({"id": doc_id, "status": "atomic_write_error", "detail": str(e)})
+                continue
 
-                # Update DB only if all succeeded
-                docs.update_one({"_id": doc_id}, {"$set": {"isIndexed": True}})
-                results.append({"id": doc_id, "status": "indexed", "chunks": len(chunks)})
+            # Update DB only if all succeeded
+            docs.update_one({"_id": doc_id}, {"$set": {"isIndexed": True}})
+            results.append({"id": doc_id, "status": "indexed", "chunks": len(chunks)})
 
         except Exception as e:
             results.append({"id": doc_id, "status": f"error", "detail": str(e)})
