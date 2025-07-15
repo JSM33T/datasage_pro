@@ -61,6 +61,10 @@
 						[disabled]="!activeSessionId" title="Clear current session messages">
 						<i class="bi bi-trash"></i> Clear Current
 					</button>
+					<button class="btn btn-sm btn-outline-info" (click)="updateSessionContext()"
+						*ngIf="isContextChanged()" title="Update the documents for this session">
+						<i class="bi bi-arrow-clockwise"></i> Update Context
+					</button>
 				</div>
 			</div>
 

@@ -72,6 +72,7 @@ export class ChatComponent implements OnInit {
 	confirmAction: (() => void) | null = null;
 
 	sessionId: string | null = null;
+	originalSelectedDocIds: string[] = []; // Store original doc IDs for comparison
 	sessionOptions: {
 		id: string;
 		createdAt: string;
@@ -133,6 +134,7 @@ export class ChatComponent implements OnInit {
 			this.activeSessionId = sessionId;
 			this.messages = res.messages || [];
 			this.selectedDocIds = res.doc_ids || [];
+			this.originalSelectedDocIds = [...this.selectedDocIds]; // Store a copy
 			localStorage.setItem('activeSession', sessionId);
 
 			// Pin all selected documents
@@ -199,6 +201,7 @@ export class ChatComponent implements OnInit {
 		this.activeSessionId = null;
 		this.messages = [];
 		this.selectedDocIds = [];
+		this.originalSelectedDocIds = [];
 		this.pinnedDocs = [];
 		localStorage.removeItem('activeSession');
 	}
@@ -207,6 +210,33 @@ export class ChatComponent implements OnInit {
 		return this.pinnedDocs.some(d => d.id === docId);
 	}
 
+	isContextChanged(): boolean {
+		if (!this.activeSessionId) return false;
+		if (this.selectedDocIds.length !== this.originalSelectedDocIds.length) {
+			return true;
+		}
+		const sortedCurrent = [...this.selectedDocIds].sort();
+		const sortedOriginal = [...this.originalSelectedDocIds].sort();
+		return JSON.stringify(sortedCurrent) !== JSON.stringify(sortedOriginal);
+	}
+
+	async updateSessionContext(): Promise<void> {
+		if (!this.sessionId) return;
+
+		try {
+			await firstValueFrom(
+				this.http.post(`${environment.apiBase}/chat/update_context`, {
+					session_id: this.sessionId,
+					doc_ids: this.selectedDocIds,
+				})
+			);
+			this.originalSelectedDocIds = [...this.selectedDocIds]; // Update original to current
+			this.showStatus('Document context updated successfully.', 'success');
+		} catch (err) {
+			console.error('Failed to update session context:', err);
+			this.showStatus('Failed to update document context.', 'error');
+		}
+	}
 
 	toggleSelect(docId: string, isChecked: boolean) {
 		if (isChecked) {

@@ -1,6 +1,3 @@
-
-
-
 from fastapi import APIRouter, Body, Request
 from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
@@ -170,6 +167,27 @@ def list_sessions(request: Request):
             "doc_ids": doc_ids
         })
     return enriched_sessions
+
+# === API: Update chat session context ===
+@router.post("/update_context")
+def update_context(data: dict = Body(...), request: Request = None):
+    user_id = request.state.user.get('username')
+    session_id = data.get("session_id")
+    doc_ids = data.get("doc_ids")
+
+    if not session_id or not doc_ids:
+        return JSONResponse(status_code=400, content={"error": "session_id and doc_ids are required"})
+
+    result = sessions.update_one(
+        {"_id": session_id, "user_id": user_id},
+        {"$set": {"doc_ids": doc_ids}}
+    )
+
+    if result.matched_count == 0:
+        return JSONResponse(status_code=404, content={"error": "Session not found or not owned by user"})
+
+    return {"status": "success", "message": "Session context updated successfully."}
+
 
 # === API: Start chat session with selected docs ===
 @router.post("/start")

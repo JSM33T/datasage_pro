@@ -179,10 +179,15 @@ def continue_chat(data: dict = Body(...), request: Request = None):
     print("\n[DEBUG] Context chunks sent to LLM:\n", context_text, "\n")
 
     # Prompt engineering: restrict LLM to context only
+    # system_prompt = (
+    #     "You are a helpful assistant. Answer ONLY using the information in the provided context below. "
+    #     "If the answer is not present in the context, reply with 'No revelant document found.'\n\nContext:\n" + context_text
+    # )
     system_prompt = (
-        "You are a helpful assistant. Answer ONLY using the information in the provided context below. "
-        "If the answer is not present in the context, reply with 'No revelant document found.'\n\nContext:\n" + context_text
-    )
+            "You are a helpful document context assistant. Answer using the information in the provided context below and maintain conversation continuity. "
+            "Reference previous parts of our conversation when relevant. "
+            "If the answer is not present in the context, first combine it with the comtext of the document present and try to combine the query with the first document received , and in the last resort, reply with 'No relevant document found for your query.'\n\nContext:\n" + context_text
+        )
 
     gpt_response = openai_client.chat.completions.create(
         model=os.getenv("OPENAI_MODEL", "gpt-3.5-turbo"),
