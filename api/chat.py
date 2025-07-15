@@ -207,7 +207,7 @@ def continue_chat(data: dict = Body(...)):
         system_prompt = (
             "You are a helpful document context assistant. Answer using the information in the provided context below and maintain conversation continuity. "
             "Reference previous parts of our conversation when relevant. "
-            "If the answer is not present in the context, reply with 'No relevant document found for your query.'\n\nContext:\n" + context_text
+            "If the answer is not present in the context, first combine it with the comtext of the document present , and in the last resort, reply with 'No relevant document found for your query.'\n\nContext:\n" + context_text
         )
         
         # Limit message history but keep enough for context (increase to 20 messages)
