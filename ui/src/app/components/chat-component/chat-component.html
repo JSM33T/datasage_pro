@@ -61,10 +61,6 @@
 						[disabled]="!activeSessionId" title="Clear current session messages">
 						<i class="bi bi-trash"></i> Clear Current
 					</button>
-					<button class="btn btn-sm btn-outline-danger" (click)="clearAllSessions()"
-						[disabled]="sessionOptions.length === 0" title="Clear all chat sessions">
-						<i class="bi bi-trash-fill"></i> Clear All
-					</button>
 				</div>
 			</div>
 
@@ -88,6 +84,10 @@
 					<div class="d-flex align-items-center gap-2">
 						<input type="checkbox" class="form-check-input" [checked]="selectedDocIds.includes(doc.id)"
 							(input)="onCheckboxChange($event, doc.id)" />
+						<button type="button" class="btn btn-sm btn-outline-success" (click)="downloadDocument(doc)"
+							title="Download document">
+							<i class="bi bi-download"></i>
+						</button>
 						<button type="button" class="btn btn-sm btn-outline-primary" (click)="togglePin(doc)"
 							[attr.aria-pressed]="isPinned(doc.id)" [disabled]="selectedDocIds.includes(doc.id)"
 							[title]="selectedDocIds.includes(doc.id) ? 'Uncheck to unpin' : (isPinned(doc.id) ? 'Unpin' : 'Pin')">

@@ -330,38 +330,6 @@ export class ChatComponent implements OnInit {
 	}
 
 	/**
-	 * Clear all chat sessions
-	 */
-	async clearAllSessions(): Promise<void> {
-		this.showConfirmationDialog(
-			'Clear All Sessions',
-			'Are you sure you want to clear all chat sessions? This action cannot be undone.',
-			async () => {
-				try {
-					await firstValueFrom(
-						this.http.post(`${environment.apiBase}/chat/clear_all_sessions`, {})
-					);
-
-					// Reset local state
-					this.sessionId = null;
-					this.activeSessionId = null;
-					this.messages = [];
-					this.sessionOptions = [];
-					localStorage.removeItem('activeSession');
-
-					// Reload session options to reflect changes
-					await this.loadSessionOptions();
-
-					this.showStatus('All chat sessions have been cleared successfully.', 'success');
-				} catch (err) {
-					console.error('Failed to clear all sessions:', err);
-					this.showStatus('Failed to clear all sessions. Please try again.', 'error');
-				}
-			}
-		);
-	}
-
-	/**
 	 * Clear messages for the current active session
 	 */
 	async clearCurrentSession(): Promise<void> {
@@ -424,5 +392,41 @@ export class ChatComponent implements OnInit {
 				}
 			}
 		);
+	}
+
+	/**
+	 * Download a document
+	 */
+	async downloadDocument(doc: any): Promise<void> {
+		if (doc && doc.id && doc.filename) {
+			try {
+				const token = localStorage.getItem('token');
+				const downloadUrl = `${environment.apiBase}/document/download/${doc.id}/${doc.filename}`;
+
+				// Use fetch to download with authentication
+				const response = await fetch(downloadUrl, {
+					method: 'GET',
+					headers: {
+						'Authorization': `Bearer ${token}`
+					}
+				});
+
+				if (response.ok) {
+					const blob = await response.blob();
+					const url = window.URL.createObjectURL(blob);
+					const a = document.createElement('a');
+					a.href = url;
+					a.download = doc.filename;
+					document.body.appendChild(a);
+					a.click();
+					window.URL.revokeObjectURL(url);
+					document.body.removeChild(a);
+				} else {
+					console.error('Download failed:', response.statusText);
+				}
+			} catch (error) {
+				console.error('Download error:', error);
+			}
+		}
 	}
 }
