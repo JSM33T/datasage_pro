@@ -479,7 +479,7 @@ def continue_chat(data: dict = Body(...), request: Request = None):
             "doc_name": doc_map.get(str(doc_id), {}).get("name", ""),
             "link": f"/resources/{doc_id}/{doc_map.get(str(doc_id), {}).get('filename', '')}",
             "download_link": f"/api/document/download/{doc_id}/{doc_map.get(str(doc_id), {}).get('filename', '')}",
-            "score": doc_score[doc_id]
+            "score": round(doc_score[doc_id], 2)
         }
         for doc_id in top_doc_ids if str(doc_id) in doc_map
     ]
