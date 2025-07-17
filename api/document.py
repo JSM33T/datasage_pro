@@ -45,7 +45,7 @@ def format_compensated_time(mongo_datetime):
         return None
     
     compensated = compensate_mongo_time(mongo_datetime)
-    return compensated.strftime("%Y-%m-%d %H:%M:%S")
+    return compensated.strftime("%d/%m/%Y %H:%M:%S")
 
 # Mongo setup
 client = MongoClient(os.getenv("MONGO_URI"))
