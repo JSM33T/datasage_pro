@@ -1,52 +1,58 @@
-<div class="row g-4" style="height: 100vh; min-height: 100vh;">
+<div class="row g-4" style="height: 100dvh; min-height: 100dvh;">
 	<!-- Left Panel: Session + Search + Docs -->
-	<div class="col-md-4 h-100">
-		<div class="card shadow-sm p-3 h-100 d-flex flex-column">
+	<div class="col-12 col-md-4 h-100 mb-3 mb-md-0">
+		<div class="card shadow-sm p-3 h-100 d-flex flex-column rounded-4 border-0" style="background: #f8f9fa;">
 			<!-- Status Message -->
-			<div *ngIf="statusMessage" class="alert alert-dismissible fade show mb-3"
+			<div *ngIf="statusMessage" class="alert alert-dismissible fade show mb-3 px-3 py-2 fs-6 shadow-sm"
 				[class.alert-success]="statusType === 'success'" [class.alert-danger]="statusType === 'error'"
-				[class.alert-info]="statusType === 'info'">
+				[class.alert-info]="statusType === 'info'" style="border-radius: 0.5rem;">
 				{{ statusMessage }}
 				<button type="button" class="btn-close" (click)="clearStatus()" aria-label="Close"></button>
 			</div>
 
 			<!-- Session Selector -->
 			<div class="mb-3">
-				<label class="form-label">Choose Session</label>
-				<div class="d-flex gap-2">
-					<select class="form-select" [ngModel]="activeSessionId" (ngModelChange)="loadSession($event)">
+				<label class="form-label fw-semibold">Choose Session</label>
+				<div class="d-flex gap-2 align-items-center">
+					<select class="form-select rounded-3 shadow-sm" [ngModel]="activeSessionId"
+						(ngModelChange)="loadSession($event)" style="min-width: 0; flex: 1;">
 						<option *ngFor="let s of sessionOptions" [value]="s.id">
 							{{ s.id.slice(0, 8) }} — {{ s.createdAt | date:'short' }}
 							<span *ngIf="s.documents.length"> [{{ getDocumentNames(s.documents) }}]</span>
 						</option>
 					</select>
-					<button class="btn btn-sm btn-outline-secondary" (click)="startNewSession()">New</button>
+					<button class="btn btn-sm btn-outline-secondary rounded-3 px-3"
+						(click)="startNewSession()">New</button>
 				</div>
 			</div>
 
 			<!-- Session List with Actions -->
 			<div class="mb-3" *ngIf="sessionOptions.length > 0">
-				<label class="form-label">Session Actions</label>
+				<label class="form-label fw-semibold">Session Actions</label>
 				<div class="session-actions">
 					<div *ngFor="let session of sessionOptions"
-						class="list-group-item session-item session-list-item d-flex justify-content-between align-items-center"
-						[class.active]="session.id === activeSessionId">
+						class="list-group-item session-item session-list-item d-flex justify-content-between align-items-center py-2 px-2"
+						[class.active]="session.id === activeSessionId" style="border-radius: 0.5rem;">
 						<div class="flex-grow-1">
-							<div class="fw-bold">{{ session.id.slice(0, 8) }}</div>
+							<div class="fw-bold fs-6">{{ session.id.slice(0, 8) }}</div>
 							<div class="text-muted small">{{ session.createdAt | date:'short' }}</div>
 							<div class="text-muted small" *ngIf="session.documents.length">
 								{{ getDocumentNames(session.documents) }}
 							</div>
 						</div>
 						<div class="d-flex gap-1">
-							<button class="btn btn-sm btn-outline-primary session-actions-btn"
+							<button class="btn btn-sm btn-outline-primary session-actions-btn rounded-3"
 								(click)="loadSession(session.id)" [disabled]="session.id === activeSessionId"
 								title="Load session">
 								<i class="bi bi-play-fill"></i>
 							</button>
-							<button class="btn btn-sm btn-outline-warning session-actions-btn"
+							<button class="btn btn-sm btn-outline-warning session-actions-btn rounded-3"
 								(click)="clearSpecificSession(session.id)" title="Clear session messages">
 								<i class="bi bi-trash"></i>
+							</button>
+							<button class="btn btn-sm btn-outline-danger session-actions-btn rounded-3"
+								(click)="deleteSession(session.id)" title="Delete session">
+								<i class="bi bi-x-circle"></i>
 							</button>
 						</div>
 					</div>
@@ -55,13 +61,13 @@
 
 			<!-- Session Management -->
 			<div class="mb-3">
-				<label class="form-label">Session Management</label>
-				<div class="d-flex session-management-buttons flex-wrap">
-					<button class="btn btn-sm btn-outline-warning" (click)="clearCurrentSession()"
+				<label class="form-label fw-semibold">Session Management</label>
+				<div class="d-flex session-management-buttons flex-wrap gap-2">
+					<button class="btn btn-sm btn-outline-warning rounded-3 px-3" (click)="clearCurrentSession()"
 						[disabled]="!activeSessionId" title="Clear current session messages">
 						<i class="bi bi-trash"></i> Clear Current
 					</button>
-					<button class="btn btn-sm btn-outline-info" (click)="updateSessionContext()"
+					<button class="btn btn-sm btn-outline-info rounded-3 px-3" (click)="updateSessionContext()"
 						*ngIf="isContextChanged()" title="Update the documents for this session">
 						<i class="bi bi-arrow-clockwise"></i> Update Context
 					</button>
@@ -70,34 +76,35 @@
 
 			<!-- Search Box -->
 			<div class="mb-3">
-				<label class="form-label">Search Documents</label>
-				<input type="text" class="form-control" [(ngModel)]="searchTerm" (input)="searchDocuments()"
-					placeholder="Search indexed documents..." />
+				<label class="form-label fw-semibold">Search Documents</label>
+				<input type="text" class="form-control rounded-3 shadow-sm" [(ngModel)]="searchTerm"
+					(input)="searchDocuments()" placeholder="Search indexed documents..." />
 			</div>
 
 			<!-- Document List -->
 			<div class="fw-semibold mb-2 d-flex align-items-center justify-content-between">
 				<span>Results</span>
-				<button type="button" class="btn btn-sm btn-outline-secondary ms-2" (click)="toggleSelectAllVisible()">
+				<button type="button" class="btn btn-sm btn-outline-secondary ms-2 rounded-3 px-3"
+					(click)="toggleSelectAllVisible()">
 					{{ areAllVisibleSelected() ? 'Unselect All' : 'Select All' }}
 				</button>
 			</div>
-			<ul class="list-group overflow-auto flex-grow-1" style="max-height: 40vh;">
-				<li class="list-group-item d-flex justify-content-between align-items-start"
-					*ngFor="let doc of visibleDocs">
+			<ul class="list-group overflow-auto flex-grow-1" style="max-height: 32dvh; min-height: 120px;">
+				<li class="list-group-item d-flex justify-content-between align-items-start py-2 px-2 rounded-3 mb-2 shadow-sm"
+					*ngFor="let doc of visibleDocs" style="border-radius: 0.5rem;">
 					<div class="me-2 flex-grow-1">
-						<div class="fw-bold">{{ doc.name }}</div>
+						<div class="fw-bold fs-6">{{ doc.name }}</div>
 						<div class="text-muted small">{{ doc.filename }}</div>
 					</div>
 
 					<div class="d-flex align-items-center gap-2">
 						<input type="checkbox" class="form-check-input" [checked]="selectedDocIds.includes(doc.id)"
 							(input)="onCheckboxChange($event, doc.id)" />
-						<button type="button" class="btn btn-sm btn-outline-success" (click)="downloadDocument(doc)"
-							title="Download document">
+						<button type="button" class="btn btn-sm btn-outline-success rounded-3"
+							(click)="downloadDocument(doc)" title="Download document">
 							<i class="bi bi-download"></i>
 						</button>
-						<button type="button" class="btn btn-sm btn-outline-primary" (click)="togglePin(doc)"
+						<button type="button" class="btn btn-sm btn-outline-primary rounded-3" (click)="togglePin(doc)"
 							[attr.aria-pressed]="isPinned(doc.id)" [disabled]="selectedDocIds.includes(doc.id)"
 							[title]="selectedDocIds.includes(doc.id) ? 'Uncheck to unpin' : (isPinned(doc.id) ? 'Unpin' : 'Pin')">
 							<i
@@ -110,19 +117,21 @@
 	</div>
 
 	<!-- Right Panel: Chat -->
-	<div class="col-md-8 d-flex flex-column" style="height: 100vh; min-height: 100vh;">
-		<div class="card shadow-sm p-3 d-flex flex-column" style="height: 100%; min-height: 100%;">
+	<div class="col-12 col-md-8 d-flex flex-column" style="height: 100dvh; min-height: 100dvh;">
+		<div class="card shadow-sm p-3 d-flex flex-column rounded-4 border-0"
+			style="height: 100%; min-height: 100%; background: #fff;">
 			<!-- Chat Messages Scrollable Area -->
-			<div class="flex-grow-1 chat-body overflow-auto px-3" #chatWindow style="height: 0; min-height: 0;">
+			<div class="flex-grow-1 chat-body overflow-auto px-3" #chatWindow
+				style="height: 0; min-height: 0; max-height: 70dvh;">
 				<div *ngFor="let msg of messages" class="mb-4" style="max-width: 640px;"
 					[ngClass]="{ 'ms-auto': msg.role === 'user' }">
 					<div class="d-flex align-items-end mb-2" [ngClass]="{ 'flex-row-reverse': msg.role === 'user' }">
 						<div class="flex-shrink-0 pe-2 ps-2">
-							<img class="rounded-circle"
+							<img class="rounded-circle border border-2" style="box-shadow: 0 2px 8px rgba(0,0,0,0.08);"
 								src="https://i.pinimg.com/originals/0c/67/5a/0c675a8e1061478d2b7b21b330093444.gif"
 								width="40" alt="avatar">
 						</div>
-						<div [ngClass]="msg.role === 'user' ? 'message-box-end bg-primary text-white' : 'message-box-start bg-light text-dark'"
+						<div [ngClass]="msg.role === 'user' ? 'message-box-end bg-primary text-white shadow-sm rounded-3 px-3 py-2' : 'message-box-start bg-light text-dark shadow-sm rounded-3 px-3 py-2'"
 							[innerHTML]="formatMessage(msg.content)"></div>
 					</div>
 					<div class="fs-xs text-body-secondary text-end">
@@ -136,9 +145,10 @@
 			<!-- Chat Input -->
 			<form class="d-flex gap-2 mt-3 pt-2 border-top" (ngSubmit)="sendMessage()"
 				style="position: sticky; bottom: 0; background: #fff; z-index: 2;">
-				<input type="text" class="form-control" [(ngModel)]="query" name="chatQuery"
-					placeholder="Type your message..." [disabled]="loading" />
-				<button type="submit" class="btn btn-primary" [disabled]="loading || !query.trim()">Send</button>
+				<input type="text" class="form-control rounded-3 shadow-sm" [(ngModel)]="query" name="chatQuery"
+					placeholder="Type your message..." [disabled]="loading" style="font-size: 1.1rem;" />
+				<button type="submit" class="btn btn-primary rounded-3 px-4"
+					[disabled]="loading || !query.trim()">Send</button>
 			</form>
 		</div>
 	</div>
@@ -148,17 +158,19 @@
 <div class="modal fade" [class.show]="showConfirmDialog" [style.display]="showConfirmDialog ? 'block' : 'none'"
 	tabindex="-1" role="dialog" aria-labelledby="confirmModalLabel" aria-hidden="true">
 	<div class="modal-dialog" role="document">
-		<div class="modal-content">
-			<div class="modal-header">
+		<div class="modal-content rounded-4 border-0 shadow-lg">
+			<div class="modal-header rounded-top-4" style="background: #f8f9fa;">
 				<h5 class="modal-title" id="confirmModalLabel">{{ confirmTitle }}</h5>
 				<button type="button" class="btn-close" (click)="handleConfirmation(false)" aria-label="Close"></button>
 			</div>
 			<div class="modal-body">
 				{{ confirmMessage }}
 			</div>
-			<div class="modal-footer">
-				<button type="button" class="btn btn-secondary" (click)="handleConfirmation(false)">Cancel</button>
-				<button type="button" class="btn btn-danger" (click)="handleConfirmation(true)">Confirm</button>
+			<div class="modal-footer rounded-bottom-4" style="background: #f8f9fa;">
+				<button type="button" class="btn btn-secondary rounded-3 px-3"
+					(click)="handleConfirmation(false)">Cancel</button>
+				<button type="button" class="btn btn-danger rounded-3 px-3"
+					(click)="handleConfirmation(true)">Confirm</button>
 			</div>
 		</div>
 	</div>

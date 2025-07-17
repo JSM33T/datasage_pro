@@ -1,3 +1,4 @@
+
 from fastapi import APIRouter, Body, Request
 from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
@@ -24,6 +25,15 @@ sessions = db["chat_sessions"]
 openai_client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 
+# === API: Delete a chat session ===
+@router.post("/delete_session/{session_id}")
+def delete_session(session_id: str, request: Request):
+    user_id = request.state.user.get('username')  # Get user ID from JWT token
+    result = sessions.delete_one({"_id": session_id, "user_id": user_id})
+    if result.deleted_count == 0:
+        return JSONResponse(status_code=404, content={"error": "Session not found or not owned by user"})
+    return {"status": "success", "message": f"Session {session_id} deleted."}
+    
 # === Get session details for UI compatibility ===
 @router.get("/get_session/{session_id}")
 def get_session(session_id: str, request: Request):
@@ -276,7 +286,7 @@ def update_context(data: dict = Body(...), request: Request = None):
     session_id = data.get("session_id")
     doc_ids = data.get("doc_ids")
 
-    if not session_id or not doc_ids:
+    if not session_id or doc_ids is None:
         return JSONResponse(status_code=400, content={"error": "session_id and doc_ids are required"})
 
     result = sessions.update_one(
@@ -441,21 +451,21 @@ def continue_chat(data: dict = Body(...), request: Request = None):
             #     "Context from selected documents:\n" + context_text
             # )
             system_prompt = (
-				"You are a helpful document context assistant. You MUST answer using the information provided in the context below. "
-				"The context contains excerpts from specific documents with their names clearly marked.\n\n"
-				f"TOP RANKED DOCUMENTS for this query (in order of relevance): {', '.join(doc_names_list)}\n"
-				f"The highest priority document you MUST prioritize: {doc_names_list[0] if doc_names_list else 'None'}\n\n"
-				"CRITICAL INSTRUCTIONS:\n"
-				"1. MANDATORY: Use the provided document context to answer the user's query.\n"
-				"2. FIRST PRIORITY: Always use information from the highest scored document first: "
-				f"'{doc_names_list[0]}' whenever relevant.\n"
-				"3. Maintain continuity: Persistently reference the highest priority document across the conversation unless explicitly instructed otherwise.\n"
-				"4. When referencing, mention the source document name.\n"
-				"5. If multiple documents are needed, combine them but still prioritize the top document.\n"
-				"6. Recall previous parts of this conversation for additional context.\n"
-				"7. If no relevant information is available, say 'No relevant information found'.\n\n"
-				"Context from selected documents:\n" + context_text
-			)
+                "You are a helpful document context assistant. You MUST answer using the information provided in the context below. "
+                "The context contains excerpts from specific documents with their names clearly marked.\n\n"
+                f"TOP RANKED DOCUMENTS for this query (in order of relevance): {', '.join(doc_names_list)}\n"
+                f"The highest priority document you MUST prioritize: {doc_names_list[0] if doc_names_list else 'None'}\n\n"
+                "CRITICAL INSTRUCTIONS:\n"
+                "1. MANDATORY: Use the provided document context to answer the user's query.\n"
+                "2. FIRST PRIORITY: Always use information from the highest scored document first: "
+                f"'{doc_names_list[0]}' whenever relevant.\n"
+                "3. Maintain continuity: Persistently reference the highest priority document across the conversation unless explicitly instructed otherwise.\n"
+                "4. When referencing, mention the source document name.\n"
+                "5. If multiple documents are needed, combine them but still prioritize the top document.\n"
+                "6. Recall previous parts of this conversation for additional context.\n"
+                "7. If no relevant information is available, say 'No relevant information found'.\n\n"
+                "Context from selected documents:\n" + context_text
+            )
 
             
             # Limit message history but keep enough for context (increase to 20 messages)

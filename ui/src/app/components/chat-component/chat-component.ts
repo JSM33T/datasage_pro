@@ -27,6 +27,41 @@ import 'prismjs/components/prism-batch';
 	styleUrls: ['chat-component.css']
 })
 export class ChatComponent implements OnInit {
+	/**
+	 * Delete a session completely
+	 */
+	async deleteSession(sessionId: string): Promise<void> {
+		if (!sessionId) return;
+
+		const sessionDisplay = sessionId.slice(0, 8);
+		this.showConfirmationDialog(
+			'Delete Session',
+			`Are you sure you want to permanently delete session ${sessionDisplay}? This action cannot be undone.`,
+			async () => {
+				try {
+					await firstValueFrom(
+						this.http.post(`${environment.apiBase}/chat/delete_session/${sessionId}`, {})
+					);
+
+					// If it's the current active session, clear local state
+					if (sessionId === this.activeSessionId) {
+						this.messages = [];
+						this.activeSessionId = null;
+						this.sessionId = null;
+						localStorage.removeItem('activeSession');
+					}
+
+					// Reload session options to reflect changes
+					await this.loadSessionOptions();
+
+					this.showStatus(`Session ${sessionDisplay} has been deleted successfully.`, 'success');
+				} catch (err) {
+					console.error('Failed to delete session:', err);
+					this.showStatus('Failed to delete session. Please try again.', 'error');
+				}
+			}
+		);
+	}
 	// Select all visible documents
 	areAllVisibleSelected(): boolean {
 		const visibleIds = this.visibleDocs.map((doc: any) => doc.id);

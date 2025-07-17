@@ -7,3 +7,4 @@ da_env/
 static/
 venv
 books/
+delete_pycache.bat
