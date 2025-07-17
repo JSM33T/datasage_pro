@@ -37,6 +37,7 @@ def get_session(session_id: str, request: Request):
         "doc_ids": chat["doc_ids"],
         "messages": chat["messages"]
     }
+
 @router.post("/resolve_docs")
 def resolve_docs(data: dict = Body(...)):
     doc_ids = data.get("doc_ids", [])
@@ -72,7 +73,6 @@ def list_sessions(request: Request):
         })
 
     return enriched_sessions
-
     
 # === Embedding helper ===
 def get_embedding(text: str):
@@ -81,98 +81,7 @@ def get_embedding(text: str):
         input=text
     )
     return np.array([response.data[0].embedding], dtype="float32")
-
-# === Enhanced context retrieval with conversation history priority ===
-def retrieve_context_with_priority(doc_ids, query, document_context_history, top_k=5):
-    """Retrieve context prioritizing documents that have been successful in conversation history"""
     
-    # Get document names for better context
-    documents = db["documents"]
-    doc_cursor = documents.find({"_id": {"$in": doc_ids}}, {"_id": 1, "name": 1})
-    doc_names = {doc["_id"]: doc["name"] for doc in doc_cursor}
-    
-    # Sort documents by priority: previously successful documents first
-    prioritized_doc_ids = []
-    remaining_doc_ids = []
-    
-    for doc_id in doc_ids:
-        if doc_id in document_context_history:
-            success_count = document_context_history[doc_id].get("success_count", 0)
-            last_score = document_context_history[doc_id].get("last_score", 0)
-            
-            # Prioritize documents that have been successful recently
-            if success_count > 0 and last_score > 0.05:
-                prioritized_doc_ids.append((doc_id, success_count, last_score))
-            else:
-                remaining_doc_ids.append(doc_id)
-        else:
-            remaining_doc_ids.append(doc_id)
-    
-    # Sort prioritized documents by success count and last score
-    prioritized_doc_ids.sort(key=lambda x: (x[1], x[2]), reverse=True)
-    final_doc_order = [doc_id for doc_id, _, _ in prioritized_doc_ids] + remaining_doc_ids
-    
-    print(f"[DEBUG] Document processing order: {final_doc_order[:5]} (showing top 5)")
-    
-    # Try to get context from prioritized documents first
-    combined_index = None
-    all_text_chunks = []
-    chunk_doc_map = []
-    
-    for doc_id in final_doc_order:
-        doc_dir = RESOURCE_DIR / doc_id
-        faiss_path = doc_dir / f"{doc_id}.faiss"
-        pkl_path = doc_dir / f"{doc_id}.pkl"
-
-        if not faiss_path.exists() or not pkl_path.exists():
-            continue
-
-        index = faiss.read_index(str(faiss_path))
-        with open(pkl_path, "rb") as f:
-            meta = pickle.load(f)
-            text_chunks = meta.get("text", [])
-            if isinstance(text_chunks, str):
-                text_chunks = [text_chunks]
-
-        for chunk in text_chunks:
-            all_text_chunks.append(chunk)
-            chunk_doc_map.append(doc_id)
-
-        if combined_index is None:
-            combined_index = index
-        else:
-            combined_index.merge_from(index)
-
-    if combined_index is None or not all_text_chunks:
-        return "No relevant document content found.", {}
-
-    query_vec = get_embedding(query)
-    D, I = combined_index.search(query_vec, top_k)
-
-    matched_chunks = []
-    doc_score = {}
-
-    for i, idx in enumerate(I[0]):
-        if 0 <= idx < len(all_text_chunks):
-            doc_id = chunk_doc_map[idx]
-            doc_name = doc_names.get(doc_id, f"Document_{doc_id}")
-            chunk_with_source = f"[From {doc_name}]:\n{all_text_chunks[idx]}"
-            matched_chunks.append(chunk_with_source)
-            distance = float(D[0][i])
-            score = round(1 / (distance + 1e-6), 2)
-            
-            # Boost score for previously successful documents
-            if doc_id in document_context_history:
-                success_count = document_context_history[doc_id].get("success_count", 0)
-                if success_count > 0:
-                    boost = min(success_count * 0.1, 1.0)  # Max boost of 1.0
-                    score = score * (1 + boost)
-                    print(f"[DEBUG] Boosted score for {doc_name}: {score:.2f} (boost: {boost:.2f})")
-            
-            doc_score[doc_id] = doc_score.get(doc_id, 0.0) + score
-
-    return "\n\n".join(matched_chunks), doc_score
-
 # === Context retrieval from FAISS + .pkl ===
 def retrieve_context_from_faiss(doc_ids, query, top_k=3):
     combined_index = None
@@ -231,6 +140,343 @@ def retrieve_context_from_faiss(doc_ids, query, top_k=3):
 
     return "\n\n".join(matched_chunks), doc_score
 
+# === Helper functions for enhanced RAG operation ===
+def calculate_document_rankings(doc_ids, document_context_history):
+    """Calculate comprehensive document rankings with decay factor"""
+    from datetime import datetime, timedelta
+    
+    rankings = {}
+    current_time = datetime.utcnow()
+    
+    for doc_id in doc_ids:
+        history = document_context_history.get(doc_id, {})
+        
+        # Base metrics
+        success_count = history.get("success_count", 0)
+        last_score = history.get("last_score", 0)
+        avg_score = history.get("avg_score", 0)
+        total_queries = history.get("total_queries", 0)
+        last_used = history.get("last_used")
+        
+        # Calculate success rate
+        success_rate = success_count / max(total_queries, 1)
+        
+        # Calculate recency factor (documents used recently get higher priority)
+        recency_factor = 1.0
+        if last_used:
+            try:
+                if isinstance(last_used, str):
+                    last_used_dt = datetime.fromisoformat(last_used.replace('Z', '+00:00'))
+                else:
+                    last_used_dt = last_used
+                
+                days_since_use = (current_time - last_used_dt).days
+                recency_factor = max(0.1, 1.0 - (days_since_use * 0.1))  # Decay over time
+            except:
+                recency_factor = 0.5  # Default if date parsing fails
+        
+        # Calculate composite score
+        composite_score = (
+            last_score * 0.4 +           # Recent performance
+            avg_score * 0.3 +            # Historical average
+            success_rate * 0.2 +         # Success rate
+            recency_factor * 0.1         # Recency boost
+        )
+        
+        rankings[doc_id] = {
+            "composite_score": composite_score,
+            "success_count": success_count,
+            "success_rate": success_rate,
+            "last_score": last_score,
+            "avg_score": avg_score,
+            "recency_factor": recency_factor
+        }
+    
+    return rankings
+
+def retrieve_single_document_context(doc_id, query, doc_names, top_k=3):
+    """Retrieve context from a single document"""
+    doc_dir = RESOURCE_DIR / doc_id
+    faiss_path = doc_dir / f"{doc_id}.faiss"
+    pkl_path = doc_dir / f"{doc_id}.pkl"
+
+    if not faiss_path.exists() or not pkl_path.exists():
+        return None, {}
+
+    try:
+        index = faiss.read_index(str(faiss_path))
+        with open(pkl_path, "rb") as f:
+            meta = pickle.load(f)
+            text_chunks = meta.get("text", [])
+            if isinstance(text_chunks, str):
+                text_chunks = [text_chunks]
+
+        if not text_chunks:
+            return None, {}
+
+        query_vec = get_embedding(query)
+        D, I = index.search(query_vec, top_k)
+
+        matched_chunks = []
+        doc_score = {}
+
+        for i, idx in enumerate(I[0]):
+            if 0 <= idx < len(text_chunks):
+                doc_name = doc_names.get(doc_id, f"Document_{doc_id}")
+                chunk_with_source = f"[From {doc_name}]:\n{text_chunks[idx]}"
+                matched_chunks.append(chunk_with_source)
+                distance = float(D[0][i])
+                score = round(1 / (distance + 1e-6), 2)
+                doc_score[doc_id] = doc_score.get(doc_id, 0.0) + score
+
+        return "\n\n".join(matched_chunks), doc_score
+    except Exception as e:
+        print(f"[DEBUG] Error in single document retrieval: {e}")
+        return None, {}
+
+def create_intelligent_document_order(doc_ids, doc_rankings):
+    """Create intelligent document ordering based on comprehensive ranking"""
+    if not doc_rankings:
+        return doc_ids
+    
+    # Separate documents into tiers based on performance
+    tier1_docs = []  # High performers
+    tier2_docs = []  # Medium performers
+    tier3_docs = []  # Low/unknown performers
+    
+    for doc_id in doc_ids:
+        ranking = doc_rankings.get(doc_id, {})
+        composite_score = ranking.get("composite_score", 0)
+        success_count = ranking.get("success_count", 0)
+        
+        if composite_score > 0.15 and success_count > 2:
+            tier1_docs.append((doc_id, composite_score))
+        elif composite_score > 0.05 or success_count > 0:
+            tier2_docs.append((doc_id, composite_score))
+        else:
+            tier3_docs.append((doc_id, composite_score))
+    
+    # Sort each tier by composite score
+    tier1_docs.sort(key=lambda x: x[1], reverse=True)
+    tier2_docs.sort(key=lambda x: x[1], reverse=True)
+    tier3_docs.sort(key=lambda x: x[1], reverse=True)
+    
+    # Combine tiers
+    final_order = (
+        [doc_id for doc_id, _ in tier1_docs] +
+        [doc_id for doc_id, _ in tier2_docs] +
+        [doc_id for doc_id, _ in tier3_docs]
+    )
+    
+    return final_order
+
+def calculate_enhanced_score(doc_id, base_score, document_context_history, priority_weight):
+    """Calculate enhanced score with historical data and priority weighting"""
+    history = document_context_history.get(doc_id, {})
+    
+    # Base score adjustments
+    enhanced_score = base_score
+    
+    # Historical performance boost
+    success_count = history.get("success_count", 0)
+    avg_score = history.get("avg_score", 0)
+    
+    if success_count > 0:
+        # Boost based on historical success (gradual, not exponential)
+        historical_boost = min(success_count * 0.05, 0.3)  # Max 30% boost
+        enhanced_score += historical_boost
+        
+        # Additional boost if average score is high
+        if avg_score > 0.1:
+            avg_boost = min(avg_score * 0.2, 0.2)  # Max 20% boost
+            enhanced_score += avg_boost
+    
+    # Apply priority weight (based on document order)
+    enhanced_score *= priority_weight
+    
+    # Apply recency factor from rankings
+    recency_factor = history.get("recency_factor", 1.0)
+    enhanced_score *= recency_factor
+    
+    return round(enhanced_score, 3)
+
+def enhance_query_with_context(query, document_context_history, messages):
+    """Intelligently enhance query with document context and conversation history"""
+    enhanced_query = query
+    
+    # Find top performing documents
+    top_docs = []
+    if document_context_history:
+        for doc_id, history in document_context_history.items():
+            success_rate = history.get("success_rate", 0)
+            avg_score = history.get("avg_score", 0)
+            success_count = history.get("success_count", 0)
+            
+            if success_count > 0 and avg_score > 0.08:  # Meaningful threshold
+                top_docs.append((doc_id, success_rate, avg_score, success_count))
+    
+    # Sort by composite ranking
+    top_docs.sort(key=lambda x: (x[1] * 0.5 + x[2] * 0.3 + min(x[3] * 0.1, 0.2)), reverse=True)
+    
+    # Analyze recent conversation for context
+    recent_context = ""
+    if len(messages) > 2:
+        # Look at last few messages for context
+        last_messages = messages[-4:]  # Last 4 messages
+        for msg in last_messages:
+            if msg["role"] == "user":
+                recent_context += msg["content"] + " "
+    
+    # Enhance query based on top performing documents
+    if top_docs:
+        best_doc_id = top_docs[0][0]
+        best_success_rate = top_docs[0][1]
+        best_avg_score = top_docs[0][2]
+        
+        # Only enhance if there's strong confidence in the document
+        if best_success_rate > 0.3 and best_avg_score > 0.1:
+            # Get document name
+            documents = db["documents"]
+            doc_info = documents.find_one({"_id": best_doc_id}, {"name": 1})
+            if doc_info:
+                doc_name = doc_info["name"]
+                
+                # Context-aware enhancement
+                if "what" in query.lower() or "how" in query.lower() or "explain" in query.lower():
+                    enhanced_query = f"{query} (focusing on {doc_name})"
+                elif len(recent_context) > 20:  # If there's conversation context
+                    enhanced_query = f"{query} (in context of {doc_name})"
+                else:
+                    enhanced_query = f"{query} wrt({doc_name})"
+                
+                print(f"[DEBUG] Enhanced query with top document context: {enhanced_query}")
+                print(f"[DEBUG] Top document: {doc_name} (success_rate: {best_success_rate:.2f}, avg_score: {best_avg_score:.3f})")
+    
+    return enhanced_query
+
+def attempt_ai_processing_fallback(query, enhanced_query, doc_score, document_context_history):
+    """Attempt AI processing fallback when standard RAG fails"""
+    # Check if we have any document with score > 5% for AI processing
+    if doc_score and max(doc_score.values()) > 0.05:
+        max_score = max(doc_score.values())
+        top_doc_id = max(doc_score.items(), key=lambda x: x[1])[0]
+        
+        print(f"[DEBUG] Low context but score {max_score:.3f} > 5%, trying AI processing")
+        
+        return process_document_with_ai(top_doc_id, enhanced_query, max_score)
+    else:
+        return "I don't know."
+
+def process_with_standard_rag(context_text_final, messages, query, enhanced_query, doc_score, document_context_history):
+    """Process query with standard RAG approach"""
+    system_prompt = (
+        "You are a helpful document context assistant. Answer ONLY using the information in the provided context below. "
+        "If the answer is not present in the context, reply with 'No relevant document found for your query.'\n\nContext:\n" + context_text_final
+    )
+    
+    try:
+        gpt_response = openai_client.chat.completions.create(
+            model=os.getenv("OPENAI_MODEL", "gpt-3.5-turbo"),
+            messages=[
+                {
+                    "role": "system",
+                    "content": system_prompt
+                },
+                *messages
+            ]
+        )
+        reply = gpt_response.choices[0].message.content.strip()
+        
+        # Post-processing check: If LLM still refuses despite high score, force AI processing
+        if (doc_score and max(doc_score.values()) > 0.05 and 
+            ("no relevant" in reply.lower() or "not found" in reply.lower() or "don't have" in reply.lower())):
+            
+            max_score = max(doc_score.values())
+            top_doc_id = max(doc_score.items(), key=lambda x: x[1])[0]
+            
+            print(f"[DEBUG] LLM refused despite score {max_score:.3f}, forcing AI processing")
+            
+            ai_reply = process_document_with_ai(top_doc_id, enhanced_query, max_score)
+            if ai_reply and ai_reply != "I don't know.":
+                return ai_reply
+        
+        return reply
+    except Exception as e:
+        print(f"[DEBUG] Error in standard RAG processing: {e}")
+        return "I encountered an error while processing your query."
+
+def process_document_with_ai(doc_id, query, score):
+    """Process a document using AI when standard RAG fails"""
+    doc_dir = RESOURCE_DIR / doc_id
+    pkl_path = doc_dir / f"{doc_id}.pkl"
+    
+    if not pkl_path.exists():
+        return "I don't know."
+    
+    try:
+        with open(pkl_path, "rb") as f:
+            meta = pickle.load(f)
+            text_chunks = meta.get("text", [])
+            if isinstance(text_chunks, str):
+                text_chunks = [text_chunks]
+        
+        if not text_chunks:
+            return "I don't know."
+        
+        # Get meaningful chunks with better selection
+        meaningful_chunks = []
+        for chunk in text_chunks[:15]:  # Increased chunk count
+            if chunk.strip() and len(chunk.strip()) > 30:
+                meaningful_chunks.append(chunk.strip())
+            if len(meaningful_chunks) >= 5:  # Get more chunks for better context
+                break
+        
+        if not meaningful_chunks:
+            return "I don't know."
+        
+        # Get document name
+        documents = db["documents"]
+        doc_info = documents.find_one({"_id": doc_id}, {"name": 1})
+        doc_name = doc_info["name"] if doc_info else f"Document_{doc_id}"
+        
+        # Use OpenAI to process the chunks and provide a coherent answer
+        combined_content = "\n\n".join(meaningful_chunks)
+        
+        processing_prompt = f"""
+You are a helpful assistant. The user asked: "{query}"
+
+I found relevant content in the {doc_name} document. Please read through this content and provide a helpful, coherent answer to the user's question based on what you find:
+
+DOCUMENT CONTENT:
+{combined_content}
+
+Please provide a clear, direct answer based on the content above. If the content doesn't fully answer the question, explain what information is available and how it relates to the query.
+"""
+        
+        gpt_response = openai_client.chat.completions.create(
+            model=os.getenv("OPENAI_MODEL", "gpt-3.5-turbo"),
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are a helpful assistant. Read the provided document content and answer the user's question based on what you find. Be direct and helpful."
+                },
+                {
+                    "role": "user",
+                    "content": processing_prompt
+                }
+            ]
+        )
+        
+        processed_reply = gpt_response.choices[0].message.content.strip()
+        reply = f"{processed_reply}\n\n*Source: {doc_name} (relevance score: {score:.1f}%)*"
+        
+        print(f"[DEBUG] AI processing successful from {doc_name}")
+        return reply
+        
+    except Exception as e:
+        print(f"[DEBUG] Error in AI processing: {e}")
+        return "I don't know."
+
 # === Enhanced context retrieval with conversation history priority ===
 def retrieve_context_with_priority(doc_ids, query, document_context_history, top_k=5):
     """Retrieve context prioritizing documents that have been successful in conversation history"""
@@ -240,35 +486,58 @@ def retrieve_context_with_priority(doc_ids, query, document_context_history, top
     doc_cursor = documents.find({"_id": {"$in": doc_ids}}, {"_id": 1, "name": 1})
     doc_names = {doc["_id"]: doc["name"] for doc in doc_cursor}
     
-    # Sort documents by priority: previously successful documents first
-    prioritized_doc_ids = []
-    remaining_doc_ids = []
+    # Calculate comprehensive document scores including historical performance
+    doc_rankings = calculate_document_rankings(doc_ids, document_context_history)
     
-    for doc_id in doc_ids:
-        if doc_id in document_context_history:
-            success_count = document_context_history[doc_id].get("success_count", 0)
-            last_score = document_context_history[doc_id].get("last_score", 0)
+    # Find the most successful document from history with decay factor
+    best_doc_id = None
+    best_composite_score = 0
+    
+    if document_context_history and doc_rankings:
+        for doc_id, ranking in doc_rankings.items():
+            if (ranking["composite_score"] > best_composite_score and 
+                ranking["composite_score"] > 0.1):  # Minimum threshold
+                best_doc_id = doc_id
+                best_composite_score = ranking["composite_score"]
+    
+    # First, try to get context from the best document only if it's significantly better
+    if best_doc_id and best_doc_id in doc_ids and best_composite_score > 0.15:
+        print(f"[DEBUG] First checking best document: {doc_names.get(best_doc_id, best_doc_id)} (composite: {best_composite_score:.3f})")
+        
+        single_doc_context, single_doc_score = retrieve_single_document_context(
+            best_doc_id, query, doc_names, top_k
+        )
+        
+        if single_doc_context and single_doc_score:
+            max_score = max(single_doc_score.values())
+            # Use adaptive threshold based on historical performance
+            threshold = max(0.08, best_composite_score * 0.5)
             
-            # Prioritize documents that have been successful recently
-            if success_count > 0 and last_score > 0.05:
-                prioritized_doc_ids.append((doc_id, success_count, last_score))
+            if max_score > threshold:
+                print(f"[DEBUG] Best document provides good results: {max_score:.3f} > {threshold:.3f}")
+                return single_doc_context, single_doc_score
             else:
-                remaining_doc_ids.append(doc_id)
-        else:
-            remaining_doc_ids.append(doc_id)
+                print(f"[DEBUG] Best document score too low: {max_score:.3f} <= {threshold:.3f}, checking other documents")
     
-    # Sort prioritized documents by success count and last score
-    prioritized_doc_ids.sort(key=lambda x: (x[1], x[2]), reverse=True)
-    final_doc_order = [doc_id for doc_id, _, _ in prioritized_doc_ids] + remaining_doc_ids
+    # If best document doesn't provide good results, check all documents with smart ordering
+    print(f"[DEBUG] Checking all documents with intelligent prioritization")
     
-    print(f"[DEBUG] Document processing order: {final_doc_order[:5]} (showing top 5)")
+    # Create intelligent document ordering based on comprehensive ranking
+    final_doc_order = create_intelligent_document_order(doc_ids, doc_rankings)
     
-    # Try to get context from prioritized documents first
+    print(f"[DEBUG] Document processing order: {[doc_names.get(doc_id, doc_id[:8]) for doc_id in final_doc_order[:5]]} (showing top 5)")
+    
+    # Try to get context from all documents with weighted scoring
     combined_index = None
     all_text_chunks = []
     chunk_doc_map = []
+    doc_priority_weights = {}
     
-    for doc_id in final_doc_order:
+    for i, doc_id in enumerate(final_doc_order):
+        # Calculate priority weight (higher for earlier documents)
+        priority_weight = 1.0 / (i + 1) if i < 10 else 0.1
+        doc_priority_weights[doc_id] = priority_weight
+        
         doc_dir = RESOURCE_DIR / doc_id
         faiss_path = doc_dir / f"{doc_id}.faiss"
         pkl_path = doc_dir / f"{doc_id}.pkl"
@@ -276,303 +545,57 @@ def retrieve_context_with_priority(doc_ids, query, document_context_history, top
         if not faiss_path.exists() or not pkl_path.exists():
             continue
 
-        index = faiss.read_index(str(faiss_path))
-        with open(pkl_path, "rb") as f:
-            meta = pickle.load(f)
-            text_chunks = meta.get("text", [])
-            if isinstance(text_chunks, str):
-                text_chunks = [text_chunks]
+        try:
+            index = faiss.read_index(str(faiss_path))
+            with open(pkl_path, "rb") as f:
+                meta = pickle.load(f)
+                text_chunks = meta.get("text", [])
+                if isinstance(text_chunks, str):
+                    text_chunks = [text_chunks]
 
-        for chunk in text_chunks:
-            all_text_chunks.append(chunk)
-            chunk_doc_map.append(doc_id)
+            for chunk in text_chunks:
+                all_text_chunks.append(chunk)
+                chunk_doc_map.append(doc_id)
 
-        if combined_index is None:
-            combined_index = index
-        else:
-            combined_index.merge_from(index)
+            if combined_index is None:
+                combined_index = index
+            else:
+                combined_index.merge_from(index)
+        except Exception as e:
+            print(f"[DEBUG] Error loading document {doc_id}: {e}")
+            continue
 
     if combined_index is None or not all_text_chunks:
         return "No relevant document content found.", {}
 
-    query_vec = get_embedding(query)
-    D, I = combined_index.search(query_vec, top_k)
+    try:
+        query_vec = get_embedding(query)
+        D, I = combined_index.search(query_vec, top_k)
 
-    matched_chunks = []
-    doc_score = {}
+        matched_chunks = []
+        doc_score = {}
 
-    for i, idx in enumerate(I[0]):
-        if 0 <= idx < len(all_text_chunks):
-            doc_id = chunk_doc_map[idx]
-            doc_name = doc_names.get(doc_id, f"Document_{doc_id}")
-            chunk_with_source = f"[From {doc_name}]:\n{all_text_chunks[idx]}"
-            matched_chunks.append(chunk_with_source)
-            distance = float(D[0][i])
-            score = round(1 / (distance + 1e-6), 2)
-            
-            # Boost score for previously successful documents
-            if doc_id in document_context_history:
-                success_count = document_context_history[doc_id].get("success_count", 0)
-                if success_count > 0:
-                    boost = min(success_count * 0.1, 1.0)  # Max boost of 1.0
-                    score = score * (1 + boost)
-                    print(f"[DEBUG] Boosted score for {doc_name}: {score:.2f} (boost: {boost:.2f})")
-            
-            doc_score[doc_id] = doc_score.get(doc_id, 0.0) + score
-
-    return "\n\n".join(matched_chunks), doc_score
-
-# === API: Start chat session ===
-@router.post("/start")
-def start_chat(data: dict = Body(...), request: Request = None):
-    user_id = request.state.user.get('username')  # Get user ID from JWT token
-    doc_ids = data.get("doc_ids")
-    if not doc_ids:
-        return JSONResponse(status_code=400, content={"error": "doc_ids required"})
-
-    session_id = str(uuid4())
-    sessions.insert_one({
-        "_id": session_id,
-        "user_id": user_id,  # Associate session with user
-        "doc_ids": doc_ids,
-        "messages": [],
-        "createdAt": datetime.utcnow()
-    })
-    new_session = sessions.find_one({ "_id": session_id }, {"_id": 1, "doc_ids": 1, "createdAt": 1 })
-    documents = db["documents"]
-    doc_meta = list(documents.find(
-        { "_id": { "$in": new_session.get("doc_ids", []) } }, # type: ignore
-        { "_id": 1, "name": 1, "filename": 1 }
-    ))
-
-    return {
-        "session_id": session_id,
-        "session": {
-            "id": new_session["_id"], # type: ignore
-            "createdAt": new_session["createdAt"], # type: ignore
-            "documents": doc_meta
-        }
-    }
-
-# === API: Continue chat ===
-@router.post("/continue")
-def continue_chat(data: dict = Body(...), request: Request = None):
-    user_id = request.state.user.get('username')  # Get user ID from JWT token
-    session_id = data.get("session_id")
-    query = data.get("query")
-    if not session_id or not query:
-        return JSONResponse(status_code=400, content={"error": "session_id and query required"})
-
-    # Find session by ID and ensure it belongs to the user
-    chat = sessions.find_one({ "_id": session_id, "user_id": user_id })
-    if not chat:
-        return JSONResponse(status_code=404, content={"error": "Session not found"})
-
-    messages = chat["messages"]
-    messages.append({ "role": "user", "content": query })
-
-    # Get document context history from session
-    document_context_history = chat.get("document_context_history", {})
-    
-    # Fetch context from FAISS + .pkl
-    fresh_doc_ids = sessions.find_one({"_id": session_id, "user_id": user_id}, {"doc_ids": 1}).get("doc_ids", []) # type: ignore
-    
-    # ENHANCED CONTEXT RETRIEVAL: Prioritize documents that have been successful before
-    context_text, doc_score = retrieve_context_with_priority(fresh_doc_ids, query, document_context_history)
-
-    # Log context for debugging
-    print("\n[DEBUG] Context chunks sent to LLM:\n", context_text, "\n")
-    print(f"[DEBUG] Doc scores: {doc_score}")
-    print(f"[DEBUG] Document context history: {document_context_history}")
-
-    # HUMANIZED FALLBACK: If score > 5%, extract content and use AI to provide coherent response
-    if doc_score and max(doc_score.values()) > 0.05:  # 5% threshold
-        max_score = max(doc_score.values())
-        top_doc_id = max(doc_score.items(), key=lambda x: x[1])[0]
-        
-        # Get document name
-        documents = db["documents"]
-        doc_info = documents.find_one({"_id": top_doc_id}, {"name": 1})
-        doc_name = doc_info["name"] if doc_info else f"Document_{top_doc_id}"
-        
-        print(f"[DEBUG] Score {max_score:.3f} > 5%, preparing fallback for {doc_name}")
-        
-        # Check if we should do direct extraction (poor context or likely refusal)
-        should_extract = (not context_text or 
-                         "No relevant document content found" in context_text or 
-                         len(context_text.strip()) < 50)
-        
-        if should_extract:
-            print(f"[DEBUG] Performing AI-processed extraction from {doc_name}")
-            
-            # Get raw chunks from the highest scoring document
-            doc_dir = RESOURCE_DIR / top_doc_id
-            pkl_path = doc_dir / f"{top_doc_id}.pkl"
-            
-            if pkl_path.exists():
-                try:
-                    with open(pkl_path, "rb") as f:
-                        meta = pickle.load(f)
-                        text_chunks = meta.get("text", [])
-                        if isinstance(text_chunks, str):
-                            text_chunks = [text_chunks]
-                    
-                    if text_chunks:
-                        # Extract first few meaningful chunks
-                        meaningful_chunks = []
-                        for chunk in text_chunks[:10]:  # First 10 chunks
-                            if chunk.strip() and len(chunk.strip()) > 20:  # Skip very short chunks
-                                meaningful_chunks.append(chunk.strip())
-                            if len(meaningful_chunks) >= 3:  # Get 3 good chunks
-                                break
-                        
-                        if meaningful_chunks:
-                            # Use OpenAI to process the chunks and provide a coherent answer
-                            combined_content = "\n\n".join(meaningful_chunks)
-                            
-                            processing_prompt = f"""
-You are a helpful assistant. The user asked: "{query}"
-
-I found relevant content in the {doc_name} document. Please read through this content and provide a helpful, coherent answer to the user's question based on what you find:
-
-DOCUMENT CONTENT:
-{combined_content}
-
-Please provide a clear, direct answer based on the content above. If the content doesn't fully answer the question, explain what information is available and how it relates to the query.
-"""
-                            
-                            gpt_response = openai_client.chat.completions.create(
-                                model=os.getenv("OPENAI_MODEL", "gpt-3.5-turbo"),
-                                messages=[
-                                    {
-                                        "role": "system",
-                                        "content": "You are a helpful assistant. Read the provided document content and answer the user's question based on what you find. Be direct and helpful."
-                                    },
-                                    {
-                                        "role": "user",
-                                        "content": processing_prompt
-                                    }
-                                ]
-                            )
-                            
-                            processed_reply = gpt_response.choices[0].message.content.strip()
-                            reply = f"{processed_reply}\n\n*Source: {doc_name} (relevance score: {max_score:.1f}%)*"
-                            
-                            print(f"[DEBUG] AI-processed extraction successful, {len(meaningful_chunks)} chunks processed")
-                            
-                            # Update messages and return early
-                            messages.append({ "role": "assistant", "content": reply })
-                            sessions.update_one({ "_id": session_id, "user_id": user_id }, { "$set": { "messages": messages } })
-                            return {
-                                "reply": reply,
-                                "messages": messages
-                            }
-                except Exception as e:
-                    print(f"[DEBUG] Error during AI-processed extraction: {e}")
-
-    # Prompt engineering: restrict LLM to context only
-    # system_prompt = (
-    #     "You are a helpful assistant. Answer ONLY using the information in the provided context below. "
-    #     "If the answer is not present in the context, reply with 'No revelant document found.'\n\nContext:\n" + context_text
-    # )
-    system_prompt = (
-            "You are a helpful document context assistant. Answer using the information in the provided context below and maintain conversation continuity. "
-            "Reference previous parts of our conversation when relevant. "
-            "If the answer is not present in the context, first combine it with the comtext of the document present and try to combine the query with the first document received , and in the last resort, reply with 'No relevant document found for your query.'\n\nContext:\n" + context_text
-        )
-
-    gpt_response = openai_client.chat.completions.create(
-        model=os.getenv("OPENAI_MODEL", "gpt-3.5-turbo"),
-        messages=[
-            {
-                "role": "system",
-                "content": system_prompt
-            },
-            *messages
-        ]
-    )
-
-    reply = gpt_response.choices[0].message.content.strip() # type: ignore
-    
-    # Post-processing check: If LLM still refuses despite high score, force AI-processed response
-    if (doc_score and max(doc_score.values()) > 0.05 and 
-        ("no relevant" in reply.lower() or "not found" in reply.lower() or "don't have" in reply.lower())):
-        
-        max_score = max(doc_score.values())
-        top_doc_id = max(doc_score.items(), key=lambda x: x[1])[0]
-        
-        print(f"[DEBUG] LLM refused despite score {max_score:.3f}, forcing AI-processed extraction")
-        
-        # Direct extraction from highest scoring document
-        doc_dir = RESOURCE_DIR / top_doc_id
-        pkl_path = doc_dir / f"{top_doc_id}.pkl"
-        
-        if pkl_path.exists():
-            try:
-                with open(pkl_path, "rb") as f:
-                    meta = pickle.load(f)
-                    text_chunks = meta.get("text", [])
-                    if isinstance(text_chunks, str):
-                        text_chunks = [text_chunks]
+        for i, idx in enumerate(I[0]):
+            if 0 <= idx < len(all_text_chunks):
+                doc_id = chunk_doc_map[idx]
+                doc_name = doc_names.get(doc_id, f"Document_{doc_id}")
+                chunk_with_source = f"[From {doc_name}]:\n{all_text_chunks[idx]}"
+                matched_chunks.append(chunk_with_source)
+                distance = float(D[0][i])
+                base_score = round(1 / (distance + 1e-6), 2)
                 
-                if text_chunks:
-                    # Get multiple meaningful chunks for better processing
-                    meaningful_chunks = []
-                    for chunk in text_chunks[:10]:
-                        if chunk.strip() and len(chunk.strip()) > 30:
-                            meaningful_chunks.append(chunk.strip())
-                        if len(meaningful_chunks) >= 3:
-                            break
-                    
-                    if meaningful_chunks:
-                        # Get document name
-                        documents = db["documents"]
-                        doc_info = documents.find_one({"_id": top_doc_id}, {"name": 1})
-                        doc_name = doc_info["name"] if doc_info else f"Document_{top_doc_id}"
-                        
-                        # Use OpenAI to process the chunks and provide a coherent answer
-                        combined_content = "\n\n".join(meaningful_chunks)
-                        
-                        processing_prompt = f"""
-You are a helpful assistant. The user asked: "{query}"
+                # Apply sophisticated scoring with historical data
+                final_score = calculate_enhanced_score(
+                    doc_id, base_score, document_context_history, 
+                    doc_priority_weights.get(doc_id, 1.0)
+                )
+                
+                doc_score[doc_id] = doc_score.get(doc_id, 0.0) + final_score
 
-I found relevant content in the {doc_name} document. Please read through this content and provide a helpful, coherent answer to the user's question based on what you find:
-
-DOCUMENT CONTENT:
-{combined_content}
-
-Please provide a clear, direct answer based on the content above. If the content doesn't fully answer the question, explain what information is available and how it relates to the query.
-"""
-                        
-                        gpt_response = openai_client.chat.completions.create(
-                            model=os.getenv("OPENAI_MODEL", "gpt-3.5-turbo"),
-                            messages=[
-                                {
-                                    "role": "system",
-                                    "content": "You are a helpful assistant. Read the provided document content and answer the user's question based on what you find. Be direct and helpful."
-                                },
-                                {
-                                    "role": "user",
-                                    "content": processing_prompt
-                                }
-                            ]
-                        )
-                        
-                        processed_reply = gpt_response.choices[0].message.content.strip()
-                        reply = f"{processed_reply}\n\n*Source: {doc_name} (relevance score: {max_score:.1f}%)*"
-                        
-                        print(f"[DEBUG] Forced AI-processed extraction successful from {doc_name}")
-            except Exception as e:
-                print(f"[DEBUG] Error in forced AI-processed extraction: {e}")
-    
-    messages.append({ "role": "assistant", "content": reply })
-
-    sessions.update_one({ "_id": session_id, "user_id": user_id }, { "$set": { "messages": messages } })
-
-    return {
-        "reply": reply,
-        "messages": messages
-    }
+        return "\n\n".join(matched_chunks), doc_score
+    except Exception as e:
+        print(f"[DEBUG] Error in context retrieval: {e}")
+        return "Error retrieving context.", {}
 
 
 @router.post("/start2")
@@ -620,21 +643,19 @@ def continue_chat_all_docs(data: dict = Body(...), request: Request = None):
         return JSONResponse(status_code=404, content={"error": "Session not found"})
 
     messages = chat["messages"]
-    messages.append({ "role": "user", "content": query })
-
+    
     # Get document context history from session
     document_context_history = chat.get("document_context_history", {})
+    
+    # Enhance query with intelligent document context
+    enhanced_query = enhance_query_with_context(query, document_context_history, messages)
+    
+    messages.append({ "role": "user", "content": enhanced_query })
 
     all_doc_ids = [doc["_id"] for doc in db["documents"].find({}, { "_id": 1 })]
     
     # === Retrieve context with priority ===
-    context_text, doc_score = retrieve_context_with_priority(all_doc_ids, query, document_context_history)
-
-    # Log context for debugging
-    print("\n[DEBUG] Context chunks sent to LLM:\n", context_text, "\n")
-    print(f"[DEBUG] Doc scores: {doc_score}")
-    print(f"[DEBUG] Document context history: {document_context_history}")
-    print("\n[DEBUG] Context chunks sent to LLM:\n", context_text, "\n")
+    context_text, doc_score = retrieve_context_with_priority(all_doc_ids, enhanced_query, document_context_history)
 
     # === Token count trimming for context_text at chunk boundaries ===
     MAX_CONTEXT_TOKENS = 3000
@@ -649,196 +670,96 @@ def continue_chat_all_docs(data: dict = Body(...), request: Request = None):
         total_tokens += chunk_tokens
     context_text_final = "\n\n".join(trimmed_context)
 
+    # Log context for debugging
+    newline_sep = '\n\n'
+    print(f"\n[DEBUG] === RAG Processing Summary ===")
+    print(f"[DEBUG] Original query: {query}")
+    print(f"[DEBUG] Enhanced query: {enhanced_query}")
+    print(f"[DEBUG] Total documents in history: {len(document_context_history)}")
+    print(f"[DEBUG] Documents with success history: {sum(1 for h in document_context_history.values() if h.get('success_count', 0) > 0)}")
+    print(f"[DEBUG] Context chunks retrieved: {len(context_text.split(newline_sep)) if context_text else 0}")
+    print(f"[DEBUG] Doc scores: {doc_score}")
+    print(f"[DEBUG] Max score: {max(doc_score.values()) if doc_score else 0:.3f}")
+    print(f"[DEBUG] Context text length: {len(context_text_final)} chars")
+    print(f"[DEBUG] === End Summary ===\n")
+
     # === Limit message history ===
     MAX_MESSAGES = 10
     messages = messages[-MAX_MESSAGES:]
 
-    # Strict anti-hallucination: if no context or all scores below threshold, try AI processing fallback
+    # Strict anti-hallucination with graceful degradation
     SIMILARITY_THRESHOLD = 0.75
     if not context_text_final or all(score < SIMILARITY_THRESHOLD for score in doc_score.values()):
-        # Check if we have any document with score > 5% for AI processing
-        if doc_score and max(doc_score.values()) > 0.05:
-            max_score = max(doc_score.values())
-            top_doc_id = max(doc_score.items(), key=lambda x: x[1])[0]
-            
-            print(f"[DEBUG] Low context but score {max_score:.3f} > 5%, trying AI processing")
-            
-            # Direct extraction from highest scoring document
-            doc_dir = RESOURCE_DIR / top_doc_id
-            pkl_path = doc_dir / f"{top_doc_id}.pkl"
-            
-            if pkl_path.exists():
-                try:
-                    with open(pkl_path, "rb") as f:
-                        meta = pickle.load(f)
-                        text_chunks = meta.get("text", [])
-                        if isinstance(text_chunks, str):
-                            text_chunks = [text_chunks]
-                    
-                    if text_chunks:
-                        # Get first meaningful chunks
-                        meaningful_chunks = []
-                        for chunk in text_chunks[:10]:
-                            if chunk.strip() and len(chunk.strip()) > 30:
-                                meaningful_chunks.append(chunk.strip())
-                            if len(meaningful_chunks) >= 3:
-                                break
-                        
-                        if meaningful_chunks:
-                            # Get document name
-                            documents = db["documents"]
-                            doc_info = documents.find_one({"_id": top_doc_id}, {"name": 1})
-                            doc_name = doc_info["name"] if doc_info else f"Document_{top_doc_id}"
-                            
-                            # Use OpenAI to process the chunks and provide a coherent answer
-                            combined_content = "\n\n".join(meaningful_chunks)
-                            
-                            processing_prompt = f"""
-You are a helpful assistant. The user asked: "{query}"
-
-I found relevant content in the {doc_name} document. Please read through this content and provide a helpful, coherent answer to the user's question based on what you find:
-
-DOCUMENT CONTENT:
-{combined_content}
-
-Please provide a clear, direct answer based on the content above. If the content doesn't fully answer the question, explain what information is available and how it relates to the query.
-"""
-                            
-                            gpt_response = openai_client.chat.completions.create(
-                                model=os.getenv("OPENAI_MODEL", "gpt-3.5-turbo"),
-                                messages=[
-                                    {
-                                        "role": "system",
-                                        "content": "You are a helpful assistant. Read the provided document content and answer the user's question based on what you find. Be direct and helpful."
-                                    },
-                                    {
-                                        "role": "user",
-                                        "content": processing_prompt
-                                    }
-                                ]
-                            )
-                            
-                            processed_reply = gpt_response.choices[0].message.content.strip()
-                            reply = f"{processed_reply}\n\n*Source: {doc_name} (relevance score: {max_score:.1f}%)*"
-                            
-                            print(f"[DEBUG] AI processing successful from {doc_name}")
-                        else:
-                            reply = "I don't know."
-                    else:
-                        reply = "I don't know."
-                except Exception as e:
-                    print(f"[DEBUG] Error in AI processing: {e}")
-                    reply = "I don't know."
-            else:
-                reply = "I don't know."
-        else:
-            reply = "I don't know."
+        reply = attempt_ai_processing_fallback(query, enhanced_query, doc_score, document_context_history)
     else:
-        system_prompt = (
-            "You are a helpful document context assistant. Answer ONLY using the information in the provided context below. "
-            "If the answer is not present in the context, reply with 'No relevant document found for your query.'\n\nContext:\n" + context_text_final
-        )
-        gpt_response = openai_client.chat.completions.create(
-            model=os.getenv("OPENAI_MODEL", "gpt-3.5-turbo"),
-            messages=[
-                {
-                    "role": "system",
-                    "content": system_prompt
-                },
-                *messages
-            ]
-        )
-        reply = gpt_response.choices[0].message.content.strip()  # type: ignore
-        
-        # Post-processing check: If LLM still refuses despite high score, force AI processing
-        if (doc_score and max(doc_score.values()) > 0.05 and 
-            ("no relevant" in reply.lower() or "not found" in reply.lower() or "don't have" in reply.lower())):
-            
-            max_score = max(doc_score.values())
-            top_doc_id = max(doc_score.items(), key=lambda x: x[1])[0]
-            
-            print(f"[DEBUG] LLM refused despite score {max_score:.3f}, forcing AI processing")
-            
-            # Direct extraction from highest scoring document
-            doc_dir = RESOURCE_DIR / top_doc_id
-            pkl_path = doc_dir / f"{top_doc_id}.pkl"
-            
-            if pkl_path.exists():
-                try:
-                    with open(pkl_path, "rb") as f:
-                        meta = pickle.load(f)
-                        text_chunks = meta.get("text", [])
-                        if isinstance(text_chunks, str):
-                            text_chunks = [text_chunks]
-                    
-                    if text_chunks:
-                        # Get first meaningful chunks
-                        meaningful_chunks = []
-                        for chunk in text_chunks[:10]:
-                            if chunk.strip() and len(chunk.strip()) > 30:
-                                meaningful_chunks.append(chunk.strip())
-                            if len(meaningful_chunks) >= 3:
-                                break
-                        
-                        if meaningful_chunks:
-                            # Get document name
-                            documents = db["documents"]
-                            doc_info = documents.find_one({"_id": top_doc_id}, {"name": 1})
-                            doc_name = doc_info["name"] if doc_info else f"Document_{top_doc_id}"
-                            
-                            # Use OpenAI to process the chunks and provide a coherent answer
-                            combined_content = "\n\n".join(meaningful_chunks)
-                            
-                            processing_prompt = f"""
-You are a helpful assistant. The user asked: "{query}"
-
-I found relevant content in the {doc_name} document. Please read through this content and provide a helpful, coherent answer to the user's question based on what you find:
-
-DOCUMENT CONTENT:
-{combined_content}
-
-Please provide a clear, direct answer based on the content above. If the content doesn't fully answer the question, explain what information is available and how it relates to the query.
-"""
-                            
-                            gpt_response = openai_client.chat.completions.create(
-                                model=os.getenv("OPENAI_MODEL", "gpt-3.5-turbo"),
-                                messages=[
-                                    {
-                                        "role": "system",
-                                        "content": "You are a helpful assistant. Read the provided document content and answer the user's question based on what you find. Be direct and helpful."
-                                    },
-                                    {
-                                        "role": "user",
-                                        "content": processing_prompt
-                                    }
-                                ]
-                            )
-                            
-                            processed_reply = gpt_response.choices[0].message.content.strip()
-                            reply = f"{processed_reply}\n\n*Source: {doc_name} (relevance score: {max_score:.1f}%)*"
-                            
-                            print(f"[DEBUG] Forced AI processing successful from {doc_name}")
-                except Exception as e:
-                    print(f"[DEBUG] Error in forced AI processing: {e}")
+        reply = process_with_standard_rag(context_text_final, messages, query, enhanced_query, doc_score, document_context_history)
 
     messages.append({ "role": "assistant", "content": reply })
 
-    # Update document context history for successful documents
+    # Update document context history for successful documents with enhanced tracking
     if doc_score:
         for doc_id, score in doc_score.items():
-            if score > 0.05:  # Only track successful documents
+            if score > 0.01:  # Track even low-scoring documents for learning
                 if doc_id not in document_context_history:
-                    document_context_history[doc_id] = {"success_count": 0, "last_score": 0}
+                    document_context_history[doc_id] = {
+                        "success_count": 0, 
+                        "total_queries": 0,
+                        "last_score": 0,
+                        "avg_score": 0,
+                        "score_history": [],
+                        "last_used": None
+                    }
                 
-                document_context_history[doc_id]["success_count"] += 1
-                document_context_history[doc_id]["last_score"] = score
+                # Update statistics
+                history = document_context_history[doc_id]
+                history["total_queries"] += 1
+                history["last_score"] = score
+                history["last_used"] = datetime.utcnow().isoformat()
+                
+                # Maintain rolling history (keep last 10 scores)
+                score_history = history.get("score_history", [])
+                score_history.append(score)
+                if len(score_history) > 10:
+                    score_history = score_history[-10:]
+                history["score_history"] = score_history
+                
+                # Update average score
+                history["avg_score"] = sum(score_history) / len(score_history)
+                
+                # Update success count (consider score > 0.05 as success)
+                if score > 0.05:
+                    history["success_count"] += 1
+                
+                # Calculate success rate
+                history["success_rate"] = history["success_count"] / history["total_queries"]
+                
+                # Add recency factor for next use
+                history["recency_factor"] = 1.0  # Reset recency since it was just used
                 
                 # Get document name for logging
                 documents = db["documents"]
                 doc_info = documents.find_one({"_id": doc_id}, {"name": 1})
                 doc_name = doc_info["name"] if doc_info else f"Document_{doc_id}"
                 
-                print(f"[DEBUG] Updated context history for {doc_name}: success_count={document_context_history[doc_id]['success_count']}, last_score={score:.2f}")
+                print(f"[DEBUG] Updated context history for {doc_name}: success_count={history['success_count']}, "
+                      f"total_queries={history['total_queries']}, avg_score={history['avg_score']:.3f}, "
+                      f"success_rate={history['success_rate']:.3f}")
+
+    # Clean up old history entries (keep only last 50 documents with activity)
+    if len(document_context_history) > 50:
+        # Sort by last_used and keep most recent
+        sorted_history = sorted(
+            document_context_history.items(),
+            key=lambda x: x[1].get("last_used", "1970-01-01T00:00:00"),
+            reverse=True
+        )
+        document_context_history = dict(sorted_history[:50])
+        print(f"[DEBUG] Cleaned up document history, keeping {len(document_context_history)} entries")
+    
+    # Optimize document context history periodically
+    import random
+    if random.random() < 0.1:  # 10% chance to optimize on each request
+        document_context_history = optimize_document_context_history(document_context_history)
 
     # Save updated document context history back to session
     sessions.update_one(
@@ -847,267 +768,6 @@ Please provide a clear, direct answer based on the content above. If the content
     )
 
     # === Sort docs by relevance score ===
-    sorted_docs = sorted(doc_score.items(), key=lambda x: x[1], reverse=True)
-    top_doc_ids = [doc_id for doc_id, _ in sorted_docs]
-
-    docs_cursor = db["documents"].find(
-        { "_id": { "$in": top_doc_ids } },
-        { "_id": 1, "name": 1, "filename": 1 }
-    )
-    doc_map = { str(d["_id"]): d for d in docs_cursor }
-
-    matched_docs = [
-        {
-            "doc_id": str(doc_id),
-            "doc_name": doc_map.get(str(doc_id), {}).get("name", ""),
-            "link": f"/resources/{doc_id}/{doc_map.get(str(doc_id), {}).get('filename', '')}",
-            "score": round(doc_score[doc_id], 2)
-        }
-        for doc_id in top_doc_ids if str(doc_id) in doc_map
-    ]
-
-    return {
-        "reply": reply,
-        "messages": messages,
-        "matched_docs": matched_docs
-    }
-
-
-@router.post("/continue3")
-def continue_chat_all_docs_v3(data: dict = Body(...), request: Request = None):
-    user_id = request.state.user.get('username')  # Get user ID from JWT token
-    session_id = data.get("session_id")
-    query = data.get("query")
-    if not session_id or not query:
-        return JSONResponse(status_code=400, content={"error": "session_id and query required"})
-
-    # Find session by ID and ensure it belongs to the user
-    chat = sessions.find_one({ "_id": session_id, "user_id": user_id })
-    if not chat:
-        return JSONResponse(status_code=404, content={"error": "Session not found"})
-
-    messages = chat["messages"]
-    messages.append({ "role": "user", "content": query })
-
-    # Get document context history from session
-    document_context_history = chat.get("document_context_history", {})
-
-    all_doc_ids = [doc["_id"] for doc in db["documents"].find({}, { "_id": 1 })]
-    
-    # Updated: retrieve context and doc_score mapping with priority
-    context_text, doc_score = retrieve_context_with_priority(all_doc_ids, query, document_context_history)
-
-    # HUMANIZED FALLBACK: If score > 5% but poor context, try AI processing
-    if (doc_score and max(doc_score.values()) > 0.05 and 
-        (not context_text or "No relevant document content found" in context_text or len(context_text.strip()) < 50)):
-        
-        max_score = max(doc_score.values())
-        top_doc_id = max(doc_score.items(), key=lambda x: x[1])[0]
-        
-        print(f"[DEBUG] Score {max_score:.3f} > 5%, trying AI processing for continue3")
-        
-        # Direct extraction from highest scoring document
-        doc_dir = RESOURCE_DIR / top_doc_id
-        pkl_path = doc_dir / f"{top_doc_id}.pkl"
-        
-        if pkl_path.exists():
-            try:
-                with open(pkl_path, "rb") as f:
-                    meta = pickle.load(f)
-                    text_chunks = meta.get("text", [])
-                    if isinstance(text_chunks, str):
-                        text_chunks = [text_chunks]
-                
-                if text_chunks:
-                    # Extract first few meaningful chunks
-                    meaningful_chunks = []
-                    for chunk in text_chunks[:10]:  # First 10 chunks
-                        if chunk.strip() and len(chunk.strip()) > 20:  # Skip very short chunks
-                            meaningful_chunks.append(chunk.strip())
-                        if len(meaningful_chunks) >= 3:  # Get 3 good chunks
-                            break
-                    
-                    if meaningful_chunks:
-                        # Get document name
-                        documents = db["documents"]
-                        doc_info = documents.find_one({"_id": top_doc_id}, {"name": 1})
-                        doc_name = doc_info["name"] if doc_info else f"Document_{top_doc_id}"
-                        
-                        # Use OpenAI to process the chunks and provide a coherent answer
-                        combined_content = "\n\n".join(meaningful_chunks)
-                        
-                        processing_prompt = f"""
-You are a helpful assistant. The user asked: "{query}"
-
-I found relevant content in the {doc_name} document. Please read through this content and provide a helpful, coherent answer to the user's question based on what you find:
-
-DOCUMENT CONTENT:
-{combined_content}
-
-Please provide a clear, direct answer based on the content above. If the content doesn't fully answer the question, explain what information is available and how it relates to the query.
-"""
-                        
-                        gpt_response = openai_client.chat.completions.create(
-                            model=os.getenv("OPENAI_MODEL", "gpt-3.5-turbo"),
-                            messages=[
-                                {
-                                    "role": "system",
-                                    "content": "You are a helpful assistant. Read the provided document content and answer the user's question based on what you find. Be direct and helpful."
-                                },
-                                {
-                                    "role": "user",
-                                    "content": processing_prompt
-                                }
-                            ]
-                        )
-                        
-                        processed_reply = gpt_response.choices[0].message.content.strip()
-                        reply = f"{processed_reply}\n\n*Source: {doc_name} (relevance score: {max_score:.1f}%)*"
-                        
-                        print(f"[DEBUG] AI processing successful for continue3, {len(meaningful_chunks)} chunks processed")
-                        
-                        # Update messages and return early
-                        messages.append({ "role": "assistant", "content": reply })
-                        sessions.update_one({ "_id": session_id, "user_id": user_id }, { "$set": { "messages": messages } })
-                        
-                        # Sort docs by relevance score
-                        sorted_docs = sorted(doc_score.items(), key=lambda x: x[1], reverse=True)
-                        top_doc_ids = [doc_id for doc_id, _ in sorted_docs]
-
-                        docs_cursor = db["documents"].find(
-                            { "_id": { "$in": top_doc_ids } },
-                            { "_id": 1, "name": 1, "filename": 1 }
-                        )
-                        doc_map = { str(d["_id"]): d for d in docs_cursor }
-
-                        matched_docs = [
-                            {
-                                "doc_id": str(doc_id),
-                                "doc_name": doc_map.get(str(doc_id), {}).get("name", ""),
-                                "link": f"/resources/{doc_id}/{doc_map.get(str(doc_id), {}).get('filename', '')}",
-                                "score": round(doc_score[doc_id], 2)
-                            }
-                            for doc_id in top_doc_ids if str(doc_id) in doc_map
-                        ]
-
-                        return {
-                            "reply": reply,
-                            "messages": messages,
-                            "matched_docs": matched_docs
-                        }
-            except Exception as e:
-                print(f"[DEBUG] Error during AI processing in continue3: {e}")
-
-    gpt_response = openai_client.chat.completions.create(
-        model=os.getenv("OPENAI_MODEL", "gpt-3.5-turbo"),
-        messages=[
-            {
-                "role": "system",
-                "content": "You are a helpful assistant. Use the following documents to answer accurately and precisely wihtout diverting from the context:\n\n" + context_text
-            },
-            *messages
-        ]
-    )
-
-    reply = gpt_response.choices[0].message.content.strip()  # type: ignore
-    
-    # Post-processing check: If LLM still refuses despite high score, force AI processing
-    if (doc_score and max(doc_score.values()) > 0.05 and 
-        ("no relevant" in reply.lower() or "not found" in reply.lower() or "don't have" in reply.lower())):
-        
-        max_score = max(doc_score.values())
-        top_doc_id = max(doc_score.items(), key=lambda x: x[1])[0]
-        
-        print(f"[DEBUG] LLM refused despite score {max_score:.3f}, forcing AI processing in continue3")
-        
-        # Direct extraction from highest scoring document
-        doc_dir = RESOURCE_DIR / top_doc_id
-        pkl_path = doc_dir / f"{top_doc_id}.pkl"
-        
-        if pkl_path.exists():
-            try:
-                with open(pkl_path, "rb") as f:
-                    meta = pickle.load(f)
-                    text_chunks = meta.get("text", [])
-                    if isinstance(text_chunks, str):
-                        text_chunks = [text_chunks]
-                
-                if text_chunks:
-                    # Get first meaningful chunks
-                    meaningful_chunks = []
-                    for chunk in text_chunks[:10]:
-                        if chunk.strip() and len(chunk.strip()) > 30:
-                            meaningful_chunks.append(chunk.strip())
-                        if len(meaningful_chunks) >= 3:
-                            break
-                    
-                    if meaningful_chunks:
-                        # Get document name
-                        documents = db["documents"]
-                        doc_info = documents.find_one({"_id": top_doc_id}, {"name": 1})
-                        doc_name = doc_info["name"] if doc_info else f"Document_{top_doc_id}"
-                        
-                        # Use OpenAI to process the chunks and provide a coherent answer
-                        combined_content = "\n\n".join(meaningful_chunks)
-                        
-                        processing_prompt = f"""
-You are a helpful assistant. The user asked: "{query}"
-
-I found relevant content in the {doc_name} document. Please read through this content and provide a helpful, coherent answer to the user's question based on what you find:
-
-DOCUMENT CONTENT:
-{combined_content}
-
-Please provide a clear, direct answer based on the content above. If the content doesn't fully answer the question, explain what information is available and how it relates to the query.
-"""
-                        
-                        gpt_response = openai_client.chat.completions.create(
-                            model=os.getenv("OPENAI_MODEL", "gpt-3.5-turbo"),
-                            messages=[
-                                {
-                                    "role": "system",
-                                    "content": "You are a helpful assistant. Read the provided document content and answer the user's question based on what you find. Be direct and helpful."
-                                },
-                                {
-                                    "role": "user",
-                                    "content": processing_prompt
-                                }
-                            ]
-                        )
-                        
-                        processed_reply = gpt_response.choices[0].message.content.strip()
-                        reply = f"{processed_reply}\n\n*Source: {doc_name} (relevance score: {max_score:.1f}%)*"
-                        
-                        print(f"[DEBUG] Forced AI processing successful from {doc_name} in continue3")
-            except Exception as e:
-                print(f"[DEBUG] Error in forced AI processing in continue3: {e}")
-    
-    messages.append({ "role": "assistant", "content": reply })
-
-    # Update document context history for successful documents
-    if doc_score:
-        for doc_id, score in doc_score.items():
-            if score > 0.05:  # Only track successful documents
-                if doc_id not in document_context_history:
-                    document_context_history[doc_id] = {"success_count": 0, "last_score": 0}
-                
-                document_context_history[doc_id]["success_count"] += 1
-                document_context_history[doc_id]["last_score"] = score
-                
-                # Get document name for logging
-                documents = db["documents"]
-                doc_info = documents.find_one({"_id": doc_id}, {"name": 1})
-                doc_name = doc_info["name"] if doc_info else f"Document_{doc_id}"
-                
-                print(f"[DEBUG] Updated context history for {doc_name}: success_count={document_context_history[doc_id]['success_count']}, last_score={score:.2f}")
-
-    # Save updated document context history back to session
-    sessions.update_one(
-        { "_id": session_id, "user_id": user_id }, 
-        { "$set": { "messages": messages, "document_context_history": document_context_history } }
-    )
-
-    # Sort docs by relevance score
     sorted_docs = sorted(doc_score.items(), key=lambda x: x[1], reverse=True)
     top_doc_ids = [doc_id for doc_id, _ in sorted_docs]
 
@@ -1181,3 +841,45 @@ def retrieve_context_from_faiss(doc_ids, query, top_k=5):
             doc_score[doc_id] = doc_score.get(doc_id, 0.0) + score
 
     return "\n\n".join(matched_chunks), doc_score
+
+def optimize_document_context_history(document_context_history):
+    """Optimize document context history by applying decay and cleanup"""
+    from datetime import datetime, timedelta
+    
+    current_time = datetime.utcnow()
+    optimized_history = {}
+    
+    for doc_id, history in document_context_history.items():
+        # Apply time decay to older entries
+        last_used_str = history.get("last_used")
+        if last_used_str:
+            try:
+                if isinstance(last_used_str, str):
+                    last_used = datetime.fromisoformat(last_used_str.replace('Z', '+00:00'))
+                else:
+                    last_used = last_used_str
+                
+                days_since_use = (current_time - last_used).days
+                
+                # Skip entries older than 30 days with no recent success
+                if days_since_use > 30 and history.get("success_count", 0) == 0:
+                    continue
+                
+                # Apply decay factor to old but successful entries
+                if days_since_use > 7:
+                    decay_factor = max(0.1, 1.0 - (days_since_use - 7) * 0.05)
+                    history["success_count"] = max(1, int(history["success_count"] * decay_factor))
+                    history["avg_score"] = history["avg_score"] * decay_factor
+                
+            except Exception as e:
+                print(f"[DEBUG] Error processing date for {doc_id}: {e}")
+                continue
+        
+        # Keep only meaningful entries
+        if (history.get("success_count", 0) > 0 or 
+            history.get("total_queries", 0) > 2 or 
+            history.get("avg_score", 0) > 0.05):
+            optimized_history[doc_id] = history
+    
+    #print(f"[DEBUG] Optimized document history: {len(document_context_history)} -> {len(optimized_history)} entries")
+    return optimized_history
