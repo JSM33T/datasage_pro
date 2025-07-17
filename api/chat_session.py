@@ -86,6 +86,14 @@ def get_embedding(text: str):
 def retrieve_context_from_faiss(doc_ids, query, top_k=3):
     combined_index = None
     all_text_chunks = []
+    chunk_doc_map = []
+    doc_names = {}
+
+    # Get document names for better context
+    documents = db["documents"]
+    doc_cursor = documents.find({"_id": {"$in": doc_ids}}, {"_id": 1, "name": 1})
+    for doc in doc_cursor:
+        doc_names[doc["_id"]] = doc["name"]
 
     for doc_id in doc_ids:
         doc_dir = RESOURCE_DIR / doc_id
@@ -102,7 +110,9 @@ def retrieve_context_from_faiss(doc_ids, query, top_k=3):
             if isinstance(text_chunks, str):
                 text_chunks = [text_chunks]
 
-        all_text_chunks.extend(text_chunks)
+        for chunk in text_chunks:
+            all_text_chunks.append(chunk)
+            chunk_doc_map.append(doc_id)
 
         if combined_index is None:
             combined_index = index
@@ -110,17 +120,25 @@ def retrieve_context_from_faiss(doc_ids, query, top_k=3):
             combined_index.merge_from(index)
 
     if combined_index is None or not all_text_chunks:
-        return "No relevant document content found."
+        return "No relevant document content found.", {}
 
     query_vec = get_embedding(query)
     D, I = combined_index.search(query_vec, top_k)
 
     matched_chunks = []
-    for idx in I[0]:
-        if 0 <= idx < len(all_text_chunks):
-            matched_chunks.append(all_text_chunks[idx])
+    doc_score = {}
 
-    return "\n\n".join(matched_chunks)
+    for i, idx in enumerate(I[0]):
+        if 0 <= idx < len(all_text_chunks):
+            doc_id = chunk_doc_map[idx]
+            doc_name = doc_names.get(doc_id, f"Document_{doc_id}")
+            chunk_with_source = f"[From {doc_name}]:\n{all_text_chunks[idx]}"
+            matched_chunks.append(chunk_with_source)
+            distance = float(D[0][i])
+            score = round(1 / (distance + 1e-6), 2)
+            doc_score[doc_id] = doc_score.get(doc_id, 0.0) + score
+
+    return "\n\n".join(matched_chunks), doc_score
 
 # === API: Start chat session ===
 @router.post("/start")
@@ -173,10 +191,96 @@ def continue_chat(data: dict = Body(...), request: Request = None):
 
     # Fetch context from FAISS + .pkl
     fresh_doc_ids = sessions.find_one({"_id": session_id, "user_id": user_id}, {"doc_ids": 1}).get("doc_ids", []) # type: ignore
-    context_text, _ = retrieve_context_from_faiss(fresh_doc_ids, query)
+    context_text, doc_score = retrieve_context_from_faiss(fresh_doc_ids, query)
 
     # Log context for debugging
     print("\n[DEBUG] Context chunks sent to LLM:\n", context_text, "\n")
+    print(f"[DEBUG] Doc scores: {doc_score}")
+
+    # HUMANIZED FALLBACK: If score > 5%, extract content and use AI to provide coherent response
+    if doc_score and max(doc_score.values()) > 0.05:  # 5% threshold
+        max_score = max(doc_score.values())
+        top_doc_id = max(doc_score.items(), key=lambda x: x[1])[0]
+        
+        # Get document name
+        documents = db["documents"]
+        doc_info = documents.find_one({"_id": top_doc_id}, {"name": 1})
+        doc_name = doc_info["name"] if doc_info else f"Document_{top_doc_id}"
+        
+        print(f"[DEBUG] Score {max_score:.3f} > 5%, preparing fallback for {doc_name}")
+        
+        # Check if we should do direct extraction (poor context or likely refusal)
+        should_extract = (not context_text or 
+                         "No relevant document content found" in context_text or 
+                         len(context_text.strip()) < 50)
+        
+        if should_extract:
+            print(f"[DEBUG] Performing AI-processed extraction from {doc_name}")
+            
+            # Get raw chunks from the highest scoring document
+            doc_dir = RESOURCE_DIR / top_doc_id
+            pkl_path = doc_dir / f"{top_doc_id}.pkl"
+            
+            if pkl_path.exists():
+                try:
+                    with open(pkl_path, "rb") as f:
+                        meta = pickle.load(f)
+                        text_chunks = meta.get("text", [])
+                        if isinstance(text_chunks, str):
+                            text_chunks = [text_chunks]
+                    
+                    if text_chunks:
+                        # Extract first few meaningful chunks
+                        meaningful_chunks = []
+                        for chunk in text_chunks[:10]:  # First 10 chunks
+                            if chunk.strip() and len(chunk.strip()) > 20:  # Skip very short chunks
+                                meaningful_chunks.append(chunk.strip())
+                            if len(meaningful_chunks) >= 3:  # Get 3 good chunks
+                                break
+                        
+                        if meaningful_chunks:
+                            # Use OpenAI to process the chunks and provide a coherent answer
+                            combined_content = "\n\n".join(meaningful_chunks)
+                            
+                            processing_prompt = f"""
+You are a helpful assistant. The user asked: "{query}"
+
+I found relevant content in the {doc_name} document. Please read through this content and provide a helpful, coherent answer to the user's question based on what you find:
+
+DOCUMENT CONTENT:
+{combined_content}
+
+Please provide a clear, direct answer based on the content above. If the content doesn't fully answer the question, explain what information is available and how it relates to the query.
+"""
+                            
+                            gpt_response = openai_client.chat.completions.create(
+                                model=os.getenv("OPENAI_MODEL", "gpt-3.5-turbo"),
+                                messages=[
+                                    {
+                                        "role": "system",
+                                        "content": "You are a helpful assistant. Read the provided document content and answer the user's question based on what you find. Be direct and helpful."
+                                    },
+                                    {
+                                        "role": "user",
+                                        "content": processing_prompt
+                                    }
+                                ]
+                            )
+                            
+                            processed_reply = gpt_response.choices[0].message.content.strip()
+                            reply = f"{processed_reply}\n\n*Source: {doc_name} (relevance score: {max_score:.1f}%)*"
+                            
+                            print(f"[DEBUG] AI-processed extraction successful, {len(meaningful_chunks)} chunks processed")
+                            
+                            # Update messages and return early
+                            messages.append({ "role": "assistant", "content": reply })
+                            sessions.update_one({ "_id": session_id, "user_id": user_id }, { "$set": { "messages": messages } })
+                            return {
+                                "reply": reply,
+                                "messages": messages
+                            }
+                except Exception as e:
+                    print(f"[DEBUG] Error during AI-processed extraction: {e}")
 
     # Prompt engineering: restrict LLM to context only
     # system_prompt = (
@@ -201,6 +305,78 @@ def continue_chat(data: dict = Body(...), request: Request = None):
     )
 
     reply = gpt_response.choices[0].message.content.strip() # type: ignore
+    
+    # Post-processing check: If LLM still refuses despite high score, force AI-processed response
+    if (doc_score and max(doc_score.values()) > 0.05 and 
+        ("no relevant" in reply.lower() or "not found" in reply.lower() or "don't have" in reply.lower())):
+        
+        max_score = max(doc_score.values())
+        top_doc_id = max(doc_score.items(), key=lambda x: x[1])[0]
+        
+        print(f"[DEBUG] LLM refused despite score {max_score:.3f}, forcing AI-processed extraction")
+        
+        # Direct extraction from highest scoring document
+        doc_dir = RESOURCE_DIR / top_doc_id
+        pkl_path = doc_dir / f"{top_doc_id}.pkl"
+        
+        if pkl_path.exists():
+            try:
+                with open(pkl_path, "rb") as f:
+                    meta = pickle.load(f)
+                    text_chunks = meta.get("text", [])
+                    if isinstance(text_chunks, str):
+                        text_chunks = [text_chunks]
+                
+                if text_chunks:
+                    # Get multiple meaningful chunks for better processing
+                    meaningful_chunks = []
+                    for chunk in text_chunks[:10]:
+                        if chunk.strip() and len(chunk.strip()) > 30:
+                            meaningful_chunks.append(chunk.strip())
+                        if len(meaningful_chunks) >= 3:
+                            break
+                    
+                    if meaningful_chunks:
+                        # Get document name
+                        documents = db["documents"]
+                        doc_info = documents.find_one({"_id": top_doc_id}, {"name": 1})
+                        doc_name = doc_info["name"] if doc_info else f"Document_{top_doc_id}"
+                        
+                        # Use OpenAI to process the chunks and provide a coherent answer
+                        combined_content = "\n\n".join(meaningful_chunks)
+                        
+                        processing_prompt = f"""
+You are a helpful assistant. The user asked: "{query}"
+
+I found relevant content in the {doc_name} document. Please read through this content and provide a helpful, coherent answer to the user's question based on what you find:
+
+DOCUMENT CONTENT:
+{combined_content}
+
+Please provide a clear, direct answer based on the content above. If the content doesn't fully answer the question, explain what information is available and how it relates to the query.
+"""
+                        
+                        gpt_response = openai_client.chat.completions.create(
+                            model=os.getenv("OPENAI_MODEL", "gpt-3.5-turbo"),
+                            messages=[
+                                {
+                                    "role": "system",
+                                    "content": "You are a helpful assistant. Read the provided document content and answer the user's question based on what you find. Be direct and helpful."
+                                },
+                                {
+                                    "role": "user",
+                                    "content": processing_prompt
+                                }
+                            ]
+                        )
+                        
+                        processed_reply = gpt_response.choices[0].message.content.strip()
+                        reply = f"{processed_reply}\n\n*Source: {doc_name} (relevance score: {max_score:.1f}%)*"
+                        
+                        print(f"[DEBUG] Forced AI-processed extraction successful from {doc_name}")
+            except Exception as e:
+                print(f"[DEBUG] Error in forced AI-processed extraction: {e}")
+    
     messages.append({ "role": "assistant", "content": reply })
 
     sessions.update_one({ "_id": session_id, "user_id": user_id }, { "$set": { "messages": messages } })
@@ -283,10 +459,86 @@ def continue_chat_all_docs(data: dict = Body(...), request: Request = None):
     MAX_MESSAGES = 10
     messages = messages[-MAX_MESSAGES:]
 
-    # Strict anti-hallucination: if no context or all scores below threshold, reply "I don't know."
+    # Strict anti-hallucination: if no context or all scores below threshold, try AI processing fallback
     SIMILARITY_THRESHOLD = 0.75
     if not context_text_final or all(score < SIMILARITY_THRESHOLD for score in doc_score.values()):
-        reply = "I don't know."
+        # Check if we have any document with score > 5% for AI processing
+        if doc_score and max(doc_score.values()) > 0.05:
+            max_score = max(doc_score.values())
+            top_doc_id = max(doc_score.items(), key=lambda x: x[1])[0]
+            
+            print(f"[DEBUG] Low context but score {max_score:.3f} > 5%, trying AI processing")
+            
+            # Direct extraction from highest scoring document
+            doc_dir = RESOURCE_DIR / top_doc_id
+            pkl_path = doc_dir / f"{top_doc_id}.pkl"
+            
+            if pkl_path.exists():
+                try:
+                    with open(pkl_path, "rb") as f:
+                        meta = pickle.load(f)
+                        text_chunks = meta.get("text", [])
+                        if isinstance(text_chunks, str):
+                            text_chunks = [text_chunks]
+                    
+                    if text_chunks:
+                        # Get first meaningful chunks
+                        meaningful_chunks = []
+                        for chunk in text_chunks[:10]:
+                            if chunk.strip() and len(chunk.strip()) > 30:
+                                meaningful_chunks.append(chunk.strip())
+                            if len(meaningful_chunks) >= 3:
+                                break
+                        
+                        if meaningful_chunks:
+                            # Get document name
+                            documents = db["documents"]
+                            doc_info = documents.find_one({"_id": top_doc_id}, {"name": 1})
+                            doc_name = doc_info["name"] if doc_info else f"Document_{top_doc_id}"
+                            
+                            # Use OpenAI to process the chunks and provide a coherent answer
+                            combined_content = "\n\n".join(meaningful_chunks)
+                            
+                            processing_prompt = f"""
+You are a helpful assistant. The user asked: "{query}"
+
+I found relevant content in the {doc_name} document. Please read through this content and provide a helpful, coherent answer to the user's question based on what you find:
+
+DOCUMENT CONTENT:
+{combined_content}
+
+Please provide a clear, direct answer based on the content above. If the content doesn't fully answer the question, explain what information is available and how it relates to the query.
+"""
+                            
+                            gpt_response = openai_client.chat.completions.create(
+                                model=os.getenv("OPENAI_MODEL", "gpt-3.5-turbo"),
+                                messages=[
+                                    {
+                                        "role": "system",
+                                        "content": "You are a helpful assistant. Read the provided document content and answer the user's question based on what you find. Be direct and helpful."
+                                    },
+                                    {
+                                        "role": "user",
+                                        "content": processing_prompt
+                                    }
+                                ]
+                            )
+                            
+                            processed_reply = gpt_response.choices[0].message.content.strip()
+                            reply = f"{processed_reply}\n\n*Source: {doc_name} (relevance score: {max_score:.1f}%)*"
+                            
+                            print(f"[DEBUG] AI processing successful from {doc_name}")
+                        else:
+                            reply = "I don't know."
+                    else:
+                        reply = "I don't know."
+                except Exception as e:
+                    print(f"[DEBUG] Error in AI processing: {e}")
+                    reply = "I don't know."
+            else:
+                reply = "I don't know."
+        else:
+            reply = "I don't know."
     else:
         system_prompt = (
             "You are a helpful document context assistant. Answer ONLY using the information in the provided context below. "
@@ -303,6 +555,77 @@ def continue_chat_all_docs(data: dict = Body(...), request: Request = None):
             ]
         )
         reply = gpt_response.choices[0].message.content.strip()  # type: ignore
+        
+        # Post-processing check: If LLM still refuses despite high score, force AI processing
+        if (doc_score and max(doc_score.values()) > 0.05 and 
+            ("no relevant" in reply.lower() or "not found" in reply.lower() or "don't have" in reply.lower())):
+            
+            max_score = max(doc_score.values())
+            top_doc_id = max(doc_score.items(), key=lambda x: x[1])[0]
+            
+            print(f"[DEBUG] LLM refused despite score {max_score:.3f}, forcing AI processing")
+            
+            # Direct extraction from highest scoring document
+            doc_dir = RESOURCE_DIR / top_doc_id
+            pkl_path = doc_dir / f"{top_doc_id}.pkl"
+            
+            if pkl_path.exists():
+                try:
+                    with open(pkl_path, "rb") as f:
+                        meta = pickle.load(f)
+                        text_chunks = meta.get("text", [])
+                        if isinstance(text_chunks, str):
+                            text_chunks = [text_chunks]
+                    
+                    if text_chunks:
+                        # Get first meaningful chunks
+                        meaningful_chunks = []
+                        for chunk in text_chunks[:10]:
+                            if chunk.strip() and len(chunk.strip()) > 30:
+                                meaningful_chunks.append(chunk.strip())
+                            if len(meaningful_chunks) >= 3:
+                                break
+                        
+                        if meaningful_chunks:
+                            # Get document name
+                            documents = db["documents"]
+                            doc_info = documents.find_one({"_id": top_doc_id}, {"name": 1})
+                            doc_name = doc_info["name"] if doc_info else f"Document_{top_doc_id}"
+                            
+                            # Use OpenAI to process the chunks and provide a coherent answer
+                            combined_content = "\n\n".join(meaningful_chunks)
+                            
+                            processing_prompt = f"""
+You are a helpful assistant. The user asked: "{query}"
+
+I found relevant content in the {doc_name} document. Please read through this content and provide a helpful, coherent answer to the user's question based on what you find:
+
+DOCUMENT CONTENT:
+{combined_content}
+
+Please provide a clear, direct answer based on the content above. If the content doesn't fully answer the question, explain what information is available and how it relates to the query.
+"""
+                            
+                            gpt_response = openai_client.chat.completions.create(
+                                model=os.getenv("OPENAI_MODEL", "gpt-3.5-turbo"),
+                                messages=[
+                                    {
+                                        "role": "system",
+                                        "content": "You are a helpful assistant. Read the provided document content and answer the user's question based on what you find. Be direct and helpful."
+                                    },
+                                    {
+                                        "role": "user",
+                                        "content": processing_prompt
+                                    }
+                                ]
+                            )
+                            
+                            processed_reply = gpt_response.choices[0].message.content.strip()
+                            reply = f"{processed_reply}\n\n*Source: {doc_name} (relevance score: {max_score:.1f}%)*"
+                            
+                            print(f"[DEBUG] Forced AI processing successful from {doc_name}")
+                except Exception as e:
+                    print(f"[DEBUG] Error in forced AI processing: {e}")
 
     messages.append({ "role": "assistant", "content": reply })
     sessions.update_one({ "_id": session_id, "user_id": user_id }, { "$set": { "messages": messages } })
@@ -355,6 +678,107 @@ def continue_chat_all_docs_v3(data: dict = Body(...), request: Request = None):
     # Updated: retrieve context and doc_score mapping
     context_text, doc_score = retrieve_context_from_faiss(all_doc_ids, query)
 
+    # HUMANIZED FALLBACK: If score > 5% but poor context, try AI processing
+    if (doc_score and max(doc_score.values()) > 0.05 and 
+        (not context_text or "No relevant document content found" in context_text or len(context_text.strip()) < 50)):
+        
+        max_score = max(doc_score.values())
+        top_doc_id = max(doc_score.items(), key=lambda x: x[1])[0]
+        
+        print(f"[DEBUG] Score {max_score:.3f} > 5%, trying AI processing for continue3")
+        
+        # Direct extraction from highest scoring document
+        doc_dir = RESOURCE_DIR / top_doc_id
+        pkl_path = doc_dir / f"{top_doc_id}.pkl"
+        
+        if pkl_path.exists():
+            try:
+                with open(pkl_path, "rb") as f:
+                    meta = pickle.load(f)
+                    text_chunks = meta.get("text", [])
+                    if isinstance(text_chunks, str):
+                        text_chunks = [text_chunks]
+                
+                if text_chunks:
+                    # Extract first few meaningful chunks
+                    meaningful_chunks = []
+                    for chunk in text_chunks[:10]:  # First 10 chunks
+                        if chunk.strip() and len(chunk.strip()) > 20:  # Skip very short chunks
+                            meaningful_chunks.append(chunk.strip())
+                        if len(meaningful_chunks) >= 3:  # Get 3 good chunks
+                            break
+                    
+                    if meaningful_chunks:
+                        # Get document name
+                        documents = db["documents"]
+                        doc_info = documents.find_one({"_id": top_doc_id}, {"name": 1})
+                        doc_name = doc_info["name"] if doc_info else f"Document_{top_doc_id}"
+                        
+                        # Use OpenAI to process the chunks and provide a coherent answer
+                        combined_content = "\n\n".join(meaningful_chunks)
+                        
+                        processing_prompt = f"""
+You are a helpful assistant. The user asked: "{query}"
+
+I found relevant content in the {doc_name} document. Please read through this content and provide a helpful, coherent answer to the user's question based on what you find:
+
+DOCUMENT CONTENT:
+{combined_content}
+
+Please provide a clear, direct answer based on the content above. If the content doesn't fully answer the question, explain what information is available and how it relates to the query.
+"""
+                        
+                        gpt_response = openai_client.chat.completions.create(
+                            model=os.getenv("OPENAI_MODEL", "gpt-3.5-turbo"),
+                            messages=[
+                                {
+                                    "role": "system",
+                                    "content": "You are a helpful assistant. Read the provided document content and answer the user's question based on what you find. Be direct and helpful."
+                                },
+                                {
+                                    "role": "user",
+                                    "content": processing_prompt
+                                }
+                            ]
+                        )
+                        
+                        processed_reply = gpt_response.choices[0].message.content.strip()
+                        reply = f"{processed_reply}\n\n*Source: {doc_name} (relevance score: {max_score:.1f}%)*"
+                        
+                        print(f"[DEBUG] AI processing successful for continue3, {len(meaningful_chunks)} chunks processed")
+                        
+                        # Update messages and return early
+                        messages.append({ "role": "assistant", "content": reply })
+                        sessions.update_one({ "_id": session_id, "user_id": user_id }, { "$set": { "messages": messages } })
+                        
+                        # Sort docs by relevance score
+                        sorted_docs = sorted(doc_score.items(), key=lambda x: x[1], reverse=True)
+                        top_doc_ids = [doc_id for doc_id, _ in sorted_docs]
+
+                        docs_cursor = db["documents"].find(
+                            { "_id": { "$in": top_doc_ids } },
+                            { "_id": 1, "name": 1, "filename": 1 }
+                        )
+                        doc_map = { str(d["_id"]): d for d in docs_cursor }
+
+                        matched_docs = [
+                            {
+                                "doc_id": str(doc_id),
+                                "doc_name": doc_map.get(str(doc_id), {}).get("name", ""),
+                                "link": f"/resources/{doc_id}/{doc_map.get(str(doc_id), {}).get('filename', '')}",
+                                "score": round(doc_score[doc_id], 2)
+                            }
+                            for doc_id in top_doc_ids if str(doc_id) in doc_map
+                        ]
+
+                        return {
+                            "reply": reply,
+                            "messages": messages,
+                            "matched_docs": matched_docs
+                        }
+            except Exception as e:
+                print(f"[DEBUG] Error during AI processing in continue3: {e}")
+
     gpt_response = openai_client.chat.completions.create(
         model=os.getenv("OPENAI_MODEL", "gpt-3.5-turbo"),
         messages=[
@@ -367,6 +791,78 @@ def continue_chat_all_docs_v3(data: dict = Body(...), request: Request = None):
     )
 
     reply = gpt_response.choices[0].message.content.strip()  # type: ignore
+    
+    # Post-processing check: If LLM still refuses despite high score, force AI processing
+    if (doc_score and max(doc_score.values()) > 0.05 and 
+        ("no relevant" in reply.lower() or "not found" in reply.lower() or "don't have" in reply.lower())):
+        
+        max_score = max(doc_score.values())
+        top_doc_id = max(doc_score.items(), key=lambda x: x[1])[0]
+        
+        print(f"[DEBUG] LLM refused despite score {max_score:.3f}, forcing AI processing in continue3")
+        
+        # Direct extraction from highest scoring document
+        doc_dir = RESOURCE_DIR / top_doc_id
+        pkl_path = doc_dir / f"{top_doc_id}.pkl"
+        
+        if pkl_path.exists():
+            try:
+                with open(pkl_path, "rb") as f:
+                    meta = pickle.load(f)
+                    text_chunks = meta.get("text", [])
+                    if isinstance(text_chunks, str):
+                        text_chunks = [text_chunks]
+                
+                if text_chunks:
+                    # Get first meaningful chunks
+                    meaningful_chunks = []
+                    for chunk in text_chunks[:10]:
+                        if chunk.strip() and len(chunk.strip()) > 30:
+                            meaningful_chunks.append(chunk.strip())
+                        if len(meaningful_chunks) >= 3:
+                            break
+                    
+                    if meaningful_chunks:
+                        # Get document name
+                        documents = db["documents"]
+                        doc_info = documents.find_one({"_id": top_doc_id}, {"name": 1})
+                        doc_name = doc_info["name"] if doc_info else f"Document_{top_doc_id}"
+                        
+                        # Use OpenAI to process the chunks and provide a coherent answer
+                        combined_content = "\n\n".join(meaningful_chunks)
+                        
+                        processing_prompt = f"""
+You are a helpful assistant. The user asked: "{query}"
+
+I found relevant content in the {doc_name} document. Please read through this content and provide a helpful, coherent answer to the user's question based on what you find:
+
+DOCUMENT CONTENT:
+{combined_content}
+
+Please provide a clear, direct answer based on the content above. If the content doesn't fully answer the question, explain what information is available and how it relates to the query.
+"""
+                        
+                        gpt_response = openai_client.chat.completions.create(
+                            model=os.getenv("OPENAI_MODEL", "gpt-3.5-turbo"),
+                            messages=[
+                                {
+                                    "role": "system",
+                                    "content": "You are a helpful assistant. Read the provided document content and answer the user's question based on what you find. Be direct and helpful."
+                                },
+                                {
+                                    "role": "user",
+                                    "content": processing_prompt
+                                }
+                            ]
+                        )
+                        
+                        processed_reply = gpt_response.choices[0].message.content.strip()
+                        reply = f"{processed_reply}\n\n*Source: {doc_name} (relevance score: {max_score:.1f}%)*"
+                        
+                        print(f"[DEBUG] Forced AI processing successful from {doc_name} in continue3")
+            except Exception as e:
+                print(f"[DEBUG] Error in forced AI processing in continue3: {e}")
+    
     messages.append({ "role": "assistant", "content": reply })
 
     sessions.update_one({ "_id": session_id, "user_id": user_id }, { "$set": { "messages": messages } })

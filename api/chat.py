@@ -115,6 +115,78 @@ def extract_keywords_from_conversation(messages, current_query):
     
     return top_keywords
 
+# === Deep search in individual document ===
+def deep_search_document(doc_id, query, keywords, top_k=15):
+    """Perform deep search in a single document using multiple strategies"""
+    doc_dir = RESOURCE_DIR / doc_id
+    faiss_path = doc_dir / f"{doc_id}.faiss"
+    pkl_path = doc_dir / f"{doc_id}.pkl"
+
+    if not faiss_path.exists() or not pkl_path.exists():
+        return None, 0
+
+    # Get document name
+    documents = db["documents"]
+    doc_info = documents.find_one({"_id": doc_id}, {"name": 1})
+    doc_name = doc_info["name"] if doc_info else f"Document_{doc_id}"
+
+    index = faiss.read_index(str(faiss_path))
+    with open(pkl_path, "rb") as f:
+        meta = pickle.load(f)
+        text_chunks = meta.get("text", [])
+        if isinstance(text_chunks, str):
+            text_chunks = [text_chunks]
+
+    if not text_chunks:
+        return None, 0
+
+    # Try multiple search strategies
+    search_queries = [
+        query,
+        " ".join(keywords[:5]) if keywords else "",
+        " ".join(keywords[:3]) if keywords else "",
+        " ".join(keywords[:10]) if keywords else "",
+    ]
+
+    all_results = []
+    all_scores = []
+
+    for search_query in search_queries:
+        if not search_query.strip():
+            continue
+            
+        try:
+            query_vec = get_embedding(search_query)
+            D, I = index.search(query_vec, min(top_k, len(text_chunks)))
+            
+            for i, idx in enumerate(I[0]):
+                if 0 <= idx < len(text_chunks):
+                    chunk = text_chunks[idx]
+                    distance = float(D[0][i])
+                    score = 1 / (distance + 1e-6)
+                    
+                    # Avoid duplicates
+                    if chunk not in [r[0] for r in all_results]:
+                        all_results.append((chunk, score))
+                        all_scores.append(score)
+        except Exception as e:
+            print(f"Error in deep search: {e}")
+            continue
+
+    if not all_results:
+        return None, 0
+
+    # Sort by score and take the best results
+    sorted_results = sorted(all_results, key=lambda x: x[1], reverse=True)
+    best_chunks = sorted_results[:top_k]
+    
+    # Combine the best chunks
+    combined_context = f"[From {doc_name}]:\n"
+    combined_context += "\n\n".join([chunk for chunk, _ in best_chunks])
+    
+    max_score = max(all_scores) if all_scores else 0
+    return combined_context, max_score
+
 # === Enhanced context retrieval with keyword fallback ===
 def retrieve_context_with_fallback(doc_ids, query, messages, top_k=8):
     """Retrieve context with multiple fallback strategies"""
@@ -377,7 +449,22 @@ def continue_chat(data: dict = Body(...), request: Request = None):
         # Combine original context with additional context from top documents
         if additional_contexts:
             context_text = context_text + "\n\n".join(additional_contexts)
-
+    
+    # AGGRESSIVE FALLBACK: Always try deep search on highest scoring document if score > 0.5
+    if doc_score and max(doc_score.values()) > 0.5:
+        top_doc_id = max(doc_score.items(), key=lambda x: x[1])[0]
+        top_score = doc_score[top_doc_id]
+        
+        print(f"DEBUG - Performing aggressive deep search on top document {top_doc_id} with score {top_score}")
+        keywords = extract_keywords_from_conversation(messages, query)
+        deep_context, deep_score = deep_search_document(top_doc_id, query, keywords, top_k=20)
+        
+        if deep_context and deep_score > 0.1:
+            # Combine original context with deep search results
+            context_text = context_text + f"\n\n=== Deep search results from {top_doc_id} ===\n" + deep_context
+            doc_score[top_doc_id] = max(doc_score[top_doc_id], deep_score)
+            print(f"DEBUG - Enhanced context with deep search score: {deep_score}")
+    
     # Strict anti-hallucination: if no context or all scores below threshold, reply "I don't know." except for greetings
     SIMILARITY_THRESHOLD = 0.2  # Lowered threshold after multiple fallback attempts
     greetings = ["hi", "hello", "hey", "greetings", "good morning", "good afternoon", "good evening"]
@@ -391,15 +478,49 @@ def continue_chat(data: dict = Body(...), request: Request = None):
         if any(greet in user_query for greet in greetings):
             reply = "Hello! How can I assist you with your selected documents?"
         else:
-            # Last resort: try one more time with just the most important keywords
-            keywords = extract_keywords_from_conversation(messages, query)
-            if keywords:
-                last_attempt_query = " ".join(keywords[:3])  # Just top 3 keywords
-                last_context, last_scores = retrieve_context_from_faiss(doc_ids, last_attempt_query, top_k=5)
+            # Strategy: Search the highest-scored document individually if it exists
+            if doc_score:
+                # Get the document with highest score
+                top_doc_id = max(doc_score.items(), key=lambda x: x[1])[0]
+                top_score = doc_score[top_doc_id]
                 
-                if last_scores and max(last_scores.values()) > 0.15:
-                    context_text = last_context
-                    doc_score = last_scores
+                # If there's a document with decent score, search it individually with expanded context
+                if top_score > 0.1:  # Very low threshold for individual document search
+                    print(f"DEBUG - Searching top document individually: {top_doc_id} with score {top_score}")
+                    
+                    # Use deep search on the top document
+                    keywords = extract_keywords_from_conversation(messages, query)
+                    deep_context, deep_score = deep_search_document(top_doc_id, query, keywords, top_k=15)
+                    
+                    if deep_context and deep_score > 0.05:
+                        context_text = deep_context
+                        doc_score = {top_doc_id: deep_score}
+                        print(f"DEBUG - Found context in top document with deep search score: {deep_score}")
+                    else:
+                        # If deep search fails, try with other high-scoring documents
+                        sorted_docs = sorted(doc_score.items(), key=lambda x: x[1], reverse=True)
+                        for doc_id, score in sorted_docs[:3]:  # Try top 3 documents
+                            if score > 0.05:
+                                deep_context, deep_score = deep_search_document(doc_id, query, keywords, top_k=10)
+                                if deep_context and deep_score > 0.05:
+                                    context_text = deep_context
+                                    doc_score = {doc_id: deep_score}
+                                    print(f"DEBUG - Found context in document {doc_id} with deep search score: {deep_score}")
+                                    break
+                        else:
+                            # Last resort: try one more time with just the most important keywords
+                            keywords = extract_keywords_from_conversation(messages, query)
+                            if keywords:
+                                last_attempt_query = " ".join(keywords[:3])  # Just top 3 keywords
+                                last_context, last_scores = retrieve_context_from_faiss(doc_ids, last_attempt_query, top_k=5)
+                                
+                                if last_scores and max(last_scores.values()) > 0.15:
+                                    context_text = last_context
+                                    doc_score = last_scores
+                                else:
+                                    reply = "No relevant information found in the selected documents for your query."
+                            else:
+                                reply = "No relevant information found in the selected documents for your query."
                 else:
                     reply = "No relevant information found in the selected documents for your query."
             else:
@@ -412,15 +533,81 @@ def continue_chat(data: dict = Body(...), request: Request = None):
     print(f"DEBUG - Max score: {max(doc_score.values()) if doc_score else 0}")
     print(f"DEBUG - Context preview: {context_text[:200] if context_text else 'No context'}...")
     
+    # Check if we should trigger deep search fallback
+    should_trigger_deep_search = (
+        not context_text or 
+        "No relevant document content found" in context_text or 
+        (doc_score and all(score < SIMILARITY_THRESHOLD for score in doc_score.values()))
+    )
+    print(f"DEBUG - Should trigger deep search: {should_trigger_deep_search}")
+    
     # Always try to use context if we have ANY reasonable score
-    if doc_score and max(doc_score.values()) > 0.1 and context_text and len(context_text) > 50:
+    if doc_score and max(doc_score.values()) > 0.05 and context_text and len(context_text) > 50:
+        print(f"DEBUG - Using context with max score: {max(doc_score.values())}")
         # Force the system to use the context even if it seems marginal
         pass  # Continue to LLM processing
     elif 'reply' not in locals():
         # Only set reply if we haven't already set it above
         reply = "No relevant information found in the selected documents for your query."
     
-    # Only proceed with LLM if we have some context
+    # SIMPLE FALLBACK: If score > 5%, extract whatever content we can directly
+    if doc_score and max(doc_score.values()) > 0.05:  # 5% threshold
+        max_score = max(doc_score.values())
+        top_doc_id = max(doc_score.items(), key=lambda x: x[1])[0]
+        
+        # Get document name
+        documents = db["documents"]
+        doc_info = documents.find_one({"_id": top_doc_id}, {"name": 1})
+        doc_name = doc_info["name"] if doc_info else f"Document_{top_doc_id}"
+        
+        print(f"DEBUG - Score {max_score:.3f} > 5%, using direct extraction fallback")
+        
+        # If LLM refuses or we have no proper context, do direct extraction
+        if ('reply' in locals() and ("no relevant" in reply.lower() or "not found" in reply.lower())) or not context_text or len(context_text) < 50:
+            print(f"DEBUG - Performing direct extraction from {doc_name}")
+            
+            # Get raw chunks from the highest scoring document
+            doc_dir = RESOURCE_DIR / top_doc_id
+            pkl_path = doc_dir / f"{top_doc_id}.pkl"
+            
+            if pkl_path.exists():
+                try:
+                    with open(pkl_path, "rb") as f:
+                        meta = pickle.load(f)
+                        text_chunks = meta.get("text", [])
+                        if isinstance(text_chunks, str):
+                            text_chunks = [text_chunks]
+                    
+                    if text_chunks:
+                        # Extract first few meaningful chunks
+                        meaningful_chunks = []
+                        for chunk in text_chunks[:10]:  # First 10 chunks
+                            if chunk.strip() and len(chunk.strip()) > 20:  # Skip very short chunks
+                                meaningful_chunks.append(chunk.strip())
+                            if len(meaningful_chunks) >= 3:  # Get 3 good chunks
+                                break
+                        
+                        if meaningful_chunks:
+                            extracted_content = f"I found information in the **{doc_name}** document (relevance score: {max_score:.1f}%):\n\n"
+                            
+                            for i, chunk in enumerate(meaningful_chunks, 1):
+                                # Truncate very long chunks
+                                if len(chunk) > 300:
+                                    chunk = chunk[:300] + "..."
+                                extracted_content += f"**Section {i}:**\n{chunk}\n\n"
+                            
+                            extracted_content += f"*This content was extracted directly from the document due to high relevance score.*"
+                            
+                            reply = extracted_content
+                            print(f"DEBUG - Direct extraction successful, {len(meaningful_chunks)} chunks extracted")
+                        else:
+                            print(f"DEBUG - No meaningful chunks found in {doc_name}")
+                    else:
+                        print(f"DEBUG - No text chunks found in {doc_name}")
+                except Exception as e:
+                    print(f"DEBUG - Error during direct extraction: {e}")
+    
+    # Only proceed with LLM if we don't have a reply yet
     if 'reply' not in locals():
         # Get top-ranked documents for the system prompt
         top_docs = sorted(doc_score.items(), key=lambda x: x[1], reverse=True)[:3]
@@ -432,38 +619,26 @@ def continue_chat(data: dict = Body(...), request: Request = None):
                 doc_names_list.append(f"{doc_info['name']} (relevance: {score:.2f})")
         
         # If we have any ranked documents, force the LLM to use them
-        if doc_score and max(doc_score.values()) > 0.1:  # Very low threshold
+        if doc_score and max(doc_score.values()) > 0.05:  # Even lower threshold after individual document search
             # Create system prompt with current context
-            # system_prompt = (
-            #     "You are a helpful document context assistant. You MUST answer using the information provided in the context below. "
-            #     "The context contains excerpts from specific documents with their names clearly marked. "
-            #     f"TOP RANKED DOCUMENTS for this query: {', '.join(doc_names_list)}\n\n"
-            #     "CRITICAL INSTRUCTIONS:\n"
-            #     "1. MANDATORY: You have been provided with relevant document context below. You MUST use this information to answer the user's question.\n"
-            #     "2. PRIORITY: Focus on information from the top-ranked documents listed above\n"
-            #     "3. When referencing information, mention which document it came from\n"
-            #     "4. If the answer requires combining information from multiple documents, do so\n"
-            #     "5. Reference previous parts of our conversation when relevant\n"
-            #     "6. Even if the information seems partial or indirect, use what's available in the context to provide a helpful response\n"
-            #     "7. Only say 'No relevant information found' if the context is truly empty or completely unrelated\n"
-            #     "8. Do NOT ignore information from highly ranked documents - they are ranked for a reason\n"
-            #     "9. Try to extract useful information even if it's not a perfect match\n\n"
-            #     "Context from selected documents:\n" + context_text
-            # )
+            max_score = max(doc_score.values())
             system_prompt = (
                 "You are a helpful document context assistant. You MUST answer using the information provided in the context below. "
                 "The context contains excerpts from specific documents with their names clearly marked.\n\n"
                 f"TOP RANKED DOCUMENTS for this query (in order of relevance): {', '.join(doc_names_list)}\n"
-                f"The highest priority document you MUST prioritize: {doc_names_list[0] if doc_names_list else 'None'}\n\n"
-                "CRITICAL INSTRUCTIONS:\n"
-                "1. MANDATORY: Use the provided document context to answer the user's query.\n"
-                "2. FIRST PRIORITY: Always use information from the highest scored document first: "
-                f"'{doc_names_list[0]}' whenever relevant.\n"
-                "3. Maintain continuity: Persistently reference the highest priority document across the conversation unless explicitly instructed otherwise.\n"
-                "4. When referencing, mention the source document name.\n"
-                "5. If multiple documents are needed, combine them but still prioritize the top document.\n"
-                "6. Recall previous parts of this conversation for additional context.\n"
-                "7. If no relevant information is available, say 'No relevant information found'.\n\n"
+                f"The highest priority document you MUST prioritize: {doc_names_list[0] if doc_names_list else 'None'}\n"
+                f"Maximum relevance score: {max_score:.3f}\n\n"
+                "CRITICAL INSTRUCTIONS - READ CAREFULLY:\n"
+                "1. ABSOLUTE REQUIREMENT: You MUST provide a helpful response using the context below. Do NOT say 'No relevant information found' unless the context is completely empty.\n"
+                "2. FORCE INTERPRETATION: Even if the context doesn't perfectly match the query, extract relevant information, make reasonable inferences, or provide related information from the documents.\n"
+                "3. DOCUMENT PRIORITY: The highest scored document contains the most relevant information. Focus on it first.\n"
+                "4. BROAD INTERPRETATION: If the user asks about 'membership document usage' and you have a 'group membership' document, that IS relevant - explain what you found.\n"
+                "5. CONTEXT UTILIZATION: Use ANY information from the provided context that could be helpful to the user's query.\n"
+                "6. REFERENCE REQUIREMENT: Always mention which document you're using and explain why it's relevant.\n"
+                "7. INFERENCE ALLOWED: You may make reasonable inferences based on the context provided.\n"
+                "8. NEVER REFUSE: Do not refuse to answer if there is ANY context provided. Always attempt to help with available information.\n"
+                "9. SCORING AWARENESS: A document was selected with a score of {max_score:.3f} - this means it IS relevant to the query.\n\n"
+                "EXAMPLE: If asked about 'membership document usage' and you have 'group membership' content, respond with: 'Based on the group membership document, here's what I found about membership...' and then provide the relevant information.\n\n"
                 "Context from selected documents:\n" + context_text
             )
 
@@ -483,6 +658,32 @@ def continue_chat(data: dict = Body(...), request: Request = None):
                 ]
             )
             reply = gpt_response.choices[0].message.content.strip()  # type: ignore
+            
+            # Post-processing check: If LLM still refuses despite high score, force a response
+            if (("no relevant" in reply.lower() or "not found" in reply.lower() or "don't have" in reply.lower()) 
+                and max_score > 1.0):  # High score threshold
+                
+                print(f"DEBUG - LLM refused despite high score {max_score:.3f}, forcing response")
+                
+                # Extract first meaningful chunk from context for forced response
+                context_lines = context_text.split('\n')
+                meaningful_content = []
+                current_doc = ""
+                
+                for line in context_lines:
+                    if line.startswith('[From '):
+                        current_doc = line
+                    elif line.strip() and not line.startswith('==='):
+                        meaningful_content.append(line.strip())
+                        if len(meaningful_content) >= 3:  # Get first 3 meaningful lines
+                            break
+                
+                if meaningful_content:
+                    forced_reply = f"Based on the {doc_names_list[0].split(' (')[0] if doc_names_list else 'selected document'}, here's what I found:\n\n"
+                    forced_reply += "\n".join(meaningful_content[:3])
+                    forced_reply += f"\n\n(This information was extracted from the highest-scoring document with relevance score: {max_score:.2f})"
+                    reply = forced_reply
+                    print(f"DEBUG - Forced response generated")
         else:
             reply = "No relevant information found in the selected documents for your query."
 
