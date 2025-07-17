@@ -424,22 +424,39 @@ def continue_chat(data: dict = Body(...), request: Request = None):
         # If we have any ranked documents, force the LLM to use them
         if doc_score and max(doc_score.values()) > 0.1:  # Very low threshold
             # Create system prompt with current context
+            # system_prompt = (
+            #     "You are a helpful document context assistant. You MUST answer using the information provided in the context below. "
+            #     "The context contains excerpts from specific documents with their names clearly marked. "
+            #     f"TOP RANKED DOCUMENTS for this query: {', '.join(doc_names_list)}\n\n"
+            #     "CRITICAL INSTRUCTIONS:\n"
+            #     "1. MANDATORY: You have been provided with relevant document context below. You MUST use this information to answer the user's question.\n"
+            #     "2. PRIORITY: Focus on information from the top-ranked documents listed above\n"
+            #     "3. When referencing information, mention which document it came from\n"
+            #     "4. If the answer requires combining information from multiple documents, do so\n"
+            #     "5. Reference previous parts of our conversation when relevant\n"
+            #     "6. Even if the information seems partial or indirect, use what's available in the context to provide a helpful response\n"
+            #     "7. Only say 'No relevant information found' if the context is truly empty or completely unrelated\n"
+            #     "8. Do NOT ignore information from highly ranked documents - they are ranked for a reason\n"
+            #     "9. Try to extract useful information even if it's not a perfect match\n\n"
+            #     "Context from selected documents:\n" + context_text
+            # )
             system_prompt = (
-                "You are a helpful document context assistant. You MUST answer using the information provided in the context below. "
-                "The context contains excerpts from specific documents with their names clearly marked. "
-                f"TOP RANKED DOCUMENTS for this query: {', '.join(doc_names_list)}\n\n"
-                "CRITICAL INSTRUCTIONS:\n"
-                "1. MANDATORY: You have been provided with relevant document context below. You MUST use this information to answer the user's question.\n"
-                "2. PRIORITY: Focus on information from the top-ranked documents listed above\n"
-                "3. When referencing information, mention which document it came from\n"
-                "4. If the answer requires combining information from multiple documents, do so\n"
-                "5. Reference previous parts of our conversation when relevant\n"
-                "6. Even if the information seems partial or indirect, use what's available in the context to provide a helpful response\n"
-                "7. Only say 'No relevant information found' if the context is truly empty or completely unrelated\n"
-                "8. Do NOT ignore information from highly ranked documents - they are ranked for a reason\n"
-                "9. Try to extract useful information even if it's not a perfect match\n\n"
-                "Context from selected documents:\n" + context_text
-            )
+				"You are a helpful document context assistant. You MUST answer using the information provided in the context below. "
+				"The context contains excerpts from specific documents with their names clearly marked.\n\n"
+				f"TOP RANKED DOCUMENTS for this query (in order of relevance): {', '.join(doc_names_list)}\n"
+				f"The highest priority document you MUST prioritize: {doc_names_list[0] if doc_names_list else 'None'}\n\n"
+				"CRITICAL INSTRUCTIONS:\n"
+				"1. MANDATORY: Use the provided document context to answer the user's query.\n"
+				"2. FIRST PRIORITY: Always use information from the highest scored document first: "
+				f"'{doc_names_list[0]}' whenever relevant.\n"
+				"3. Maintain continuity: Persistently reference the highest priority document across the conversation unless explicitly instructed otherwise.\n"
+				"4. When referencing, mention the source document name.\n"
+				"5. If multiple documents are needed, combine them but still prioritize the top document.\n"
+				"6. Recall previous parts of this conversation for additional context.\n"
+				"7. If no relevant information is available, say 'No relevant information found'.\n\n"
+				"Context from selected documents:\n" + context_text
+			)
+
             
             # Limit message history but keep enough for context (increase to 20 messages)
             MAX_MESSAGES = 20
