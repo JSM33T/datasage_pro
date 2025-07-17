@@ -22,8 +22,9 @@ RESOURCE_DIR.mkdir(exist_ok=True)
 # Helper function to get current Indian time
 def get_indian_time():
     """Get current time in Indian Standard Time (IST)"""
+    utc_now = datetime.utcnow().replace(tzinfo=pytz.UTC)
     ist = pytz.timezone('Asia/Kolkata')
-    return datetime.now(ist)
+    return utc_now.astimezone(ist)
 
 # Mongo setup
 client = MongoClient(os.getenv("MONGO_URI"))
