@@ -8,6 +8,7 @@ from pymongo import MongoClient
 import os
 import shutil
 import re
+import pytz
 
 from fastapi import Body
 
@@ -17,6 +18,12 @@ router = APIRouter()
 
 RESOURCE_DIR = Path("./resources")
 RESOURCE_DIR.mkdir(exist_ok=True)
+
+# Helper function to get current Indian time
+def get_indian_time():
+    """Get current time in Indian Standard Time (IST)"""
+    ist = pytz.timezone('Asia/Kolkata')
+    return datetime.now(ist)
 
 # Mongo setup
 client = MongoClient(os.getenv("MONGO_URI"))
@@ -125,7 +132,7 @@ async def add_document(
             "description": description,
             "generatedSummary": "",
             "isIndexed": False,
-            "dateAdded": datetime.utcnow(),
+            "dateAdded": get_indian_time(),
             "uploaded_by": user_id  # Track who uploaded the document
         })
 
@@ -191,7 +198,7 @@ async def add_document_v2(
             "description": description,
             "generatedSummary": "",
             "isIndexed": False,
-            "dateAdded": datetime.utcnow(),
+            "dateAdded": get_indian_time(),
             "uploaded_by": user_id  # Track who uploaded the document
         })
 
