@@ -82,6 +82,97 @@ def get_embedding(text: str):
     )
     return np.array([response.data[0].embedding], dtype="float32")
 
+# === Enhanced context retrieval with conversation history priority ===
+def retrieve_context_with_priority(doc_ids, query, document_context_history, top_k=5):
+    """Retrieve context prioritizing documents that have been successful in conversation history"""
+    
+    # Get document names for better context
+    documents = db["documents"]
+    doc_cursor = documents.find({"_id": {"$in": doc_ids}}, {"_id": 1, "name": 1})
+    doc_names = {doc["_id"]: doc["name"] for doc in doc_cursor}
+    
+    # Sort documents by priority: previously successful documents first
+    prioritized_doc_ids = []
+    remaining_doc_ids = []
+    
+    for doc_id in doc_ids:
+        if doc_id in document_context_history:
+            success_count = document_context_history[doc_id].get("success_count", 0)
+            last_score = document_context_history[doc_id].get("last_score", 0)
+            
+            # Prioritize documents that have been successful recently
+            if success_count > 0 and last_score > 0.05:
+                prioritized_doc_ids.append((doc_id, success_count, last_score))
+            else:
+                remaining_doc_ids.append(doc_id)
+        else:
+            remaining_doc_ids.append(doc_id)
+    
+    # Sort prioritized documents by success count and last score
+    prioritized_doc_ids.sort(key=lambda x: (x[1], x[2]), reverse=True)
+    final_doc_order = [doc_id for doc_id, _, _ in prioritized_doc_ids] + remaining_doc_ids
+    
+    print(f"[DEBUG] Document processing order: {final_doc_order[:5]} (showing top 5)")
+    
+    # Try to get context from prioritized documents first
+    combined_index = None
+    all_text_chunks = []
+    chunk_doc_map = []
+    
+    for doc_id in final_doc_order:
+        doc_dir = RESOURCE_DIR / doc_id
+        faiss_path = doc_dir / f"{doc_id}.faiss"
+        pkl_path = doc_dir / f"{doc_id}.pkl"
+
+        if not faiss_path.exists() or not pkl_path.exists():
+            continue
+
+        index = faiss.read_index(str(faiss_path))
+        with open(pkl_path, "rb") as f:
+            meta = pickle.load(f)
+            text_chunks = meta.get("text", [])
+            if isinstance(text_chunks, str):
+                text_chunks = [text_chunks]
+
+        for chunk in text_chunks:
+            all_text_chunks.append(chunk)
+            chunk_doc_map.append(doc_id)
+
+        if combined_index is None:
+            combined_index = index
+        else:
+            combined_index.merge_from(index)
+
+    if combined_index is None or not all_text_chunks:
+        return "No relevant document content found.", {}
+
+    query_vec = get_embedding(query)
+    D, I = combined_index.search(query_vec, top_k)
+
+    matched_chunks = []
+    doc_score = {}
+
+    for i, idx in enumerate(I[0]):
+        if 0 <= idx < len(all_text_chunks):
+            doc_id = chunk_doc_map[idx]
+            doc_name = doc_names.get(doc_id, f"Document_{doc_id}")
+            chunk_with_source = f"[From {doc_name}]:\n{all_text_chunks[idx]}"
+            matched_chunks.append(chunk_with_source)
+            distance = float(D[0][i])
+            score = round(1 / (distance + 1e-6), 2)
+            
+            # Boost score for previously successful documents
+            if doc_id in document_context_history:
+                success_count = document_context_history[doc_id].get("success_count", 0)
+                if success_count > 0:
+                    boost = min(success_count * 0.1, 1.0)  # Max boost of 1.0
+                    score = score * (1 + boost)
+                    print(f"[DEBUG] Boosted score for {doc_name}: {score:.2f} (boost: {boost:.2f})")
+            
+            doc_score[doc_id] = doc_score.get(doc_id, 0.0) + score
+
+    return "\n\n".join(matched_chunks), doc_score
+
 # === Context retrieval from FAISS + .pkl ===
 def retrieve_context_from_faiss(doc_ids, query, top_k=3):
     combined_index = None
@@ -140,6 +231,97 @@ def retrieve_context_from_faiss(doc_ids, query, top_k=3):
 
     return "\n\n".join(matched_chunks), doc_score
 
+# === Enhanced context retrieval with conversation history priority ===
+def retrieve_context_with_priority(doc_ids, query, document_context_history, top_k=5):
+    """Retrieve context prioritizing documents that have been successful in conversation history"""
+    
+    # Get document names for better context
+    documents = db["documents"]
+    doc_cursor = documents.find({"_id": {"$in": doc_ids}}, {"_id": 1, "name": 1})
+    doc_names = {doc["_id"]: doc["name"] for doc in doc_cursor}
+    
+    # Sort documents by priority: previously successful documents first
+    prioritized_doc_ids = []
+    remaining_doc_ids = []
+    
+    for doc_id in doc_ids:
+        if doc_id in document_context_history:
+            success_count = document_context_history[doc_id].get("success_count", 0)
+            last_score = document_context_history[doc_id].get("last_score", 0)
+            
+            # Prioritize documents that have been successful recently
+            if success_count > 0 and last_score > 0.05:
+                prioritized_doc_ids.append((doc_id, success_count, last_score))
+            else:
+                remaining_doc_ids.append(doc_id)
+        else:
+            remaining_doc_ids.append(doc_id)
+    
+    # Sort prioritized documents by success count and last score
+    prioritized_doc_ids.sort(key=lambda x: (x[1], x[2]), reverse=True)
+    final_doc_order = [doc_id for doc_id, _, _ in prioritized_doc_ids] + remaining_doc_ids
+    
+    print(f"[DEBUG] Document processing order: {final_doc_order[:5]} (showing top 5)")
+    
+    # Try to get context from prioritized documents first
+    combined_index = None
+    all_text_chunks = []
+    chunk_doc_map = []
+    
+    for doc_id in final_doc_order:
+        doc_dir = RESOURCE_DIR / doc_id
+        faiss_path = doc_dir / f"{doc_id}.faiss"
+        pkl_path = doc_dir / f"{doc_id}.pkl"
+
+        if not faiss_path.exists() or not pkl_path.exists():
+            continue
+
+        index = faiss.read_index(str(faiss_path))
+        with open(pkl_path, "rb") as f:
+            meta = pickle.load(f)
+            text_chunks = meta.get("text", [])
+            if isinstance(text_chunks, str):
+                text_chunks = [text_chunks]
+
+        for chunk in text_chunks:
+            all_text_chunks.append(chunk)
+            chunk_doc_map.append(doc_id)
+
+        if combined_index is None:
+            combined_index = index
+        else:
+            combined_index.merge_from(index)
+
+    if combined_index is None or not all_text_chunks:
+        return "No relevant document content found.", {}
+
+    query_vec = get_embedding(query)
+    D, I = combined_index.search(query_vec, top_k)
+
+    matched_chunks = []
+    doc_score = {}
+
+    for i, idx in enumerate(I[0]):
+        if 0 <= idx < len(all_text_chunks):
+            doc_id = chunk_doc_map[idx]
+            doc_name = doc_names.get(doc_id, f"Document_{doc_id}")
+            chunk_with_source = f"[From {doc_name}]:\n{all_text_chunks[idx]}"
+            matched_chunks.append(chunk_with_source)
+            distance = float(D[0][i])
+            score = round(1 / (distance + 1e-6), 2)
+            
+            # Boost score for previously successful documents
+            if doc_id in document_context_history:
+                success_count = document_context_history[doc_id].get("success_count", 0)
+                if success_count > 0:
+                    boost = min(success_count * 0.1, 1.0)  # Max boost of 1.0
+                    score = score * (1 + boost)
+                    print(f"[DEBUG] Boosted score for {doc_name}: {score:.2f} (boost: {boost:.2f})")
+            
+            doc_score[doc_id] = doc_score.get(doc_id, 0.0) + score
+
+    return "\n\n".join(matched_chunks), doc_score
+
 # === API: Start chat session ===
 @router.post("/start")
 def start_chat(data: dict = Body(...), request: Request = None):
@@ -189,13 +371,19 @@ def continue_chat(data: dict = Body(...), request: Request = None):
     messages = chat["messages"]
     messages.append({ "role": "user", "content": query })
 
+    # Get document context history from session
+    document_context_history = chat.get("document_context_history", {})
+    
     # Fetch context from FAISS + .pkl
     fresh_doc_ids = sessions.find_one({"_id": session_id, "user_id": user_id}, {"doc_ids": 1}).get("doc_ids", []) # type: ignore
-    context_text, doc_score = retrieve_context_from_faiss(fresh_doc_ids, query)
+    
+    # ENHANCED CONTEXT RETRIEVAL: Prioritize documents that have been successful before
+    context_text, doc_score = retrieve_context_with_priority(fresh_doc_ids, query, document_context_history)
 
     # Log context for debugging
     print("\n[DEBUG] Context chunks sent to LLM:\n", context_text, "\n")
     print(f"[DEBUG] Doc scores: {doc_score}")
+    print(f"[DEBUG] Document context history: {document_context_history}")
 
     # HUMANIZED FALLBACK: If score > 5%, extract content and use AI to provide coherent response
     if doc_score and max(doc_score.values()) > 0.05:  # 5% threshold
@@ -434,12 +622,18 @@ def continue_chat_all_docs(data: dict = Body(...), request: Request = None):
     messages = chat["messages"]
     messages.append({ "role": "user", "content": query })
 
+    # Get document context history from session
+    document_context_history = chat.get("document_context_history", {})
+
     all_doc_ids = [doc["_id"] for doc in db["documents"].find({}, { "_id": 1 })]
     
-    # === Retrieve context ===
-    context_text, doc_score = retrieve_context_from_faiss(all_doc_ids, query)
+    # === Retrieve context with priority ===
+    context_text, doc_score = retrieve_context_with_priority(all_doc_ids, query, document_context_history)
 
     # Log context for debugging
+    print("\n[DEBUG] Context chunks sent to LLM:\n", context_text, "\n")
+    print(f"[DEBUG] Doc scores: {doc_score}")
+    print(f"[DEBUG] Document context history: {document_context_history}")
     print("\n[DEBUG] Context chunks sent to LLM:\n", context_text, "\n")
 
     # === Token count trimming for context_text at chunk boundaries ===
@@ -628,7 +822,29 @@ Please provide a clear, direct answer based on the content above. If the content
                     print(f"[DEBUG] Error in forced AI processing: {e}")
 
     messages.append({ "role": "assistant", "content": reply })
-    sessions.update_one({ "_id": session_id, "user_id": user_id }, { "$set": { "messages": messages } })
+
+    # Update document context history for successful documents
+    if doc_score:
+        for doc_id, score in doc_score.items():
+            if score > 0.05:  # Only track successful documents
+                if doc_id not in document_context_history:
+                    document_context_history[doc_id] = {"success_count": 0, "last_score": 0}
+                
+                document_context_history[doc_id]["success_count"] += 1
+                document_context_history[doc_id]["last_score"] = score
+                
+                # Get document name for logging
+                documents = db["documents"]
+                doc_info = documents.find_one({"_id": doc_id}, {"name": 1})
+                doc_name = doc_info["name"] if doc_info else f"Document_{doc_id}"
+                
+                print(f"[DEBUG] Updated context history for {doc_name}: success_count={document_context_history[doc_id]['success_count']}, last_score={score:.2f}")
+
+    # Save updated document context history back to session
+    sessions.update_one(
+        { "_id": session_id, "user_id": user_id }, 
+        { "$set": { "messages": messages, "document_context_history": document_context_history } }
+    )
 
     # === Sort docs by relevance score ===
     sorted_docs = sorted(doc_score.items(), key=lambda x: x[1], reverse=True)
@@ -673,10 +889,13 @@ def continue_chat_all_docs_v3(data: dict = Body(...), request: Request = None):
     messages = chat["messages"]
     messages.append({ "role": "user", "content": query })
 
+    # Get document context history from session
+    document_context_history = chat.get("document_context_history", {})
+
     all_doc_ids = [doc["_id"] for doc in db["documents"].find({}, { "_id": 1 })]
     
-    # Updated: retrieve context and doc_score mapping
-    context_text, doc_score = retrieve_context_from_faiss(all_doc_ids, query)
+    # Updated: retrieve context and doc_score mapping with priority
+    context_text, doc_score = retrieve_context_with_priority(all_doc_ids, query, document_context_history)
 
     # HUMANIZED FALLBACK: If score > 5% but poor context, try AI processing
     if (doc_score and max(doc_score.values()) > 0.05 and 
@@ -865,7 +1084,28 @@ Please provide a clear, direct answer based on the content above. If the content
     
     messages.append({ "role": "assistant", "content": reply })
 
-    sessions.update_one({ "_id": session_id, "user_id": user_id }, { "$set": { "messages": messages } })
+    # Update document context history for successful documents
+    if doc_score:
+        for doc_id, score in doc_score.items():
+            if score > 0.05:  # Only track successful documents
+                if doc_id not in document_context_history:
+                    document_context_history[doc_id] = {"success_count": 0, "last_score": 0}
+                
+                document_context_history[doc_id]["success_count"] += 1
+                document_context_history[doc_id]["last_score"] = score
+                
+                # Get document name for logging
+                documents = db["documents"]
+                doc_info = documents.find_one({"_id": doc_id}, {"name": 1})
+                doc_name = doc_info["name"] if doc_info else f"Document_{doc_id}"
+                
+                print(f"[DEBUG] Updated context history for {doc_name}: success_count={document_context_history[doc_id]['success_count']}, last_score={score:.2f}")
+
+    # Save updated document context history back to session
+    sessions.update_one(
+        { "_id": session_id, "user_id": user_id }, 
+        { "$set": { "messages": messages, "document_context_history": document_context_history } }
+    )
 
     # Sort docs by relevance score
     sorted_docs = sorted(doc_score.items(), key=lambda x: x[1], reverse=True)
