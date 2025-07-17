@@ -22,11 +22,30 @@ RESOURCE_DIR.mkdir(exist_ok=True)
 # Helper function to get current Indian time
 def get_indian_time():
     """Get current time in Indian Standard Time (IST) - timezone naive for MongoDB"""
-    utc_now = datetime.utcnow().replace(tzinfo=pytz.UTC)
+    # Use timezone-aware UTC time for better accuracy
+    utc_now = datetime.now(pytz.UTC)
     ist = pytz.timezone('Asia/Kolkata')
     ist_time = utc_now.astimezone(ist)
     # Return timezone-naive datetime in IST for MongoDB compatibility
     return ist_time.replace(tzinfo=None)
+
+def compensate_mongo_time(mongo_datetime):
+    """Compensate for MongoDB time delay by adding 5:30 hours"""
+    if mongo_datetime is None:
+        return None
+    
+    from datetime import timedelta
+    # Add 5 hours and 30 minutes compensation
+    compensated_time = mongo_datetime + timedelta(hours=5, minutes=30)
+    return compensated_time
+
+def format_compensated_time(mongo_datetime):
+    """Format MongoDB datetime with compensation for display"""
+    if mongo_datetime is None:
+        return None
+    
+    compensated = compensate_mongo_time(mongo_datetime)
+    return compensated.strftime("%Y-%m-%d %H:%M:%S")
 
 # Mongo setup
 client = MongoClient(os.getenv("MONGO_URI"))
@@ -67,6 +86,9 @@ def search_documents(query: str = Query(..., min_length=1), request: Request = N
     def process_docs(docs):
         for doc in docs:
             doc["id"] = str(doc.get("_id", doc.get("id")))
+            # Apply time compensation to dateAdded field
+            if "dateAdded" in doc and doc["dateAdded"]:
+                doc["dateAdded"] = compensate_mongo_time(doc["dateAdded"])
             doc.pop("_id", None)
         return docs
 
@@ -96,6 +118,9 @@ def get_documents_by_ids(ids: str = Query(..., description="Comma-separated docu
     ))
     for doc in docs:
         doc["id"] = str(doc["_id"])
+        # Apply time compensation to dateAdded field
+        if "dateAdded" in doc and doc["dateAdded"]:
+            doc["dateAdded"] = compensate_mongo_time(doc["dateAdded"])
         del doc["_id"]
     return docs
 
@@ -284,6 +309,9 @@ def list_documents(
     for idx, doc in enumerate(docs, start=skips + 1):
         doc["id"] = str(doc["_id"])
         doc["serial_no"] = idx
+        # Apply time compensation to dateAdded field
+        if "dateAdded" in doc and doc["dateAdded"]:
+            doc["dateAdded"] = compensate_mongo_time(doc["dateAdded"])
         del doc["_id"]
 
     return {"items": docs, "total": total, "page": page, "page_size": page_size}
