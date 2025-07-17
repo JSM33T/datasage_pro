@@ -376,9 +376,24 @@ export class Document implements OnInit {
 		this.selectedFile = input?.files?.[0] ?? null;
 	}
 
-	// Format ISO date to readable string
+	// Format ISO date to readable string with consistent DD-MM-YYYY format
 	formatDate(iso: string): string {
-		return new Date(iso).toLocaleString();
+		if (!iso) return '';
+
+		const date = new Date(iso);
+
+		// Check if date is valid
+		if (isNaN(date.getTime())) return '';
+
+		// Format as DD-MM-YYYY HH:MM:SS
+		const day = date.getDate().toString().padStart(2, '0');
+		const month = (date.getMonth() + 1).toString().padStart(2, '0');
+		const year = date.getFullYear();
+		const hours = date.getHours().toString().padStart(2, '0');
+		const minutes = date.getMinutes().toString().padStart(2, '0');
+		const seconds = date.getSeconds().toString().padStart(2, '0');
+
+		return `${day}-${month}-${year} ${hours}:${minutes}:${seconds}`;
 	}
 
 	get filteredDocs() {

@@ -21,8 +21,8 @@ def test_mongo_time_scenarios():
     # If you're seeing 1:25 PM when it should be 7:07 PM, that's about 5:42 difference
     print("\n3. Testing your specific delay scenario:")
     # Simulate the time you're seeing in the system
-    displayed_time = datetime.strptime("17/07/2025 13:25:39", "%d/%m/%Y %H:%M:%S")
-    expected_time = datetime.strptime("17/07/2025 19:07:00", "%d/%m/%Y %H:%M:%S")
+    displayed_time = datetime.strptime("17-07-2025 13:25:39", "%d-%m-%Y %H:%M:%S")
+    expected_time = datetime.strptime("17-07-2025 19:07:00", "%d-%m-%Y %H:%M:%S")
     actual_delay = expected_time - displayed_time
     print(f"   Displayed time: {displayed_time}")
     print(f"   Expected time: {expected_time}")
@@ -39,7 +39,7 @@ def test_mongo_time_scenarios():
     
     # Test case 5: Test formatting
     print("\n5. Testing time formatting:")
-    test_time = datetime.strptime("17/07/2025 13:25:39", "%d/%m/%Y %H:%M:%S")
+    test_time = datetime.strptime("17-07-2025 13:25:39", "%d-%m-%Y %H:%M:%S")
     formatted = format_compensated_time(test_time)
     print(f"   Original time: {test_time}")
     print(f"   Formatted compensated: {formatted}")

@@ -80,8 +80,8 @@ def get_server_time_info():
         'ist_time': ist_time,
         'ist_time_naive': ist_time.replace(tzinfo=None),
         'local_time': local_time,
-        'ist_formatted': ist_time.strftime("%d/%m/%Y %H:%M:%S %Z"),
-        'utc_formatted': utc_now.strftime("%d/%m/%Y %H:%M:%S %Z")
+        'ist_formatted': ist_time.strftime("%d-%m-%Y %H:%M:%S %Z"),
+        'utc_formatted': utc_now.strftime("%d-%m-%Y %H:%M:%S %Z")
     }
 
 if __name__ == "__main__":
@@ -93,7 +93,7 @@ if __name__ == "__main__":
     print("\n=== Legacy Function Test ===")
     ist_time = get_indian_time()
     print("IST Time (timezone-naive):", ist_time)
-    print("IST Time (formatted):", ist_time.strftime("%d/%m/%Y %H:%M:%S"))
+    print("IST Time (formatted):", ist_time.strftime("%d-%m-%Y %H:%M:%S"))
 
     print("\n=== Time Comparisons ===")
     print("UTC vs IST difference:", time_info['ist_time_naive'] - time_info['utc_time'].replace(tzinfo=None))
