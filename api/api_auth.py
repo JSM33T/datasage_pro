@@ -24,8 +24,8 @@ class APIAuthConfig:
         self.country_code = "ind"
         self.currency_code = "inr"
         self.language_code = "eng"
-        self.jwt_secret = os.getenv("JWT_SECRET", "your-secret-key-change-in-production")
-        self.jwt_expiry_hours = int(os.getenv("JWT_EXPIRY_HOURS", "24"))
+        self.jwt_secret = os.getenv("JWT_SECRET", "RevalSysSecretKey")
+        self.jwt_expiry_hours = int(os.getenv("JWT_EXPIRY_HOURS", "48"))
 
 class APIAuthenticator:
     def __init__(self):

@@ -268,7 +268,7 @@ def list_documents(
     cursor = collection.find(
         query_filter,
         {"_id": 1, "name": 1, "filename": 1, "isIndexed": 1, "description": 1, "generatedSummary": 1, "dateAdded": 1}
-    ).skip(skips).limit(page_size)
+    ).sort("dateAdded", -1).skip(skips).limit(page_size)
 
     docs = list(cursor)
     for idx, doc in enumerate(docs, start=skips + 1):

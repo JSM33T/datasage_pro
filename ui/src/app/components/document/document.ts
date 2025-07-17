@@ -202,13 +202,9 @@ export class Document implements OnInit {
 
 			if (result?.status === 'indexed') {
 				await this.fetchDocs();
-				this.showToast('Document indexed successfully.');
-			} else {
-				this.showToast(`Indexing status: ${result?.status || 'unknown'}`, true);
 			}
 		} catch (error) {
 			console.error('Indexing failed:', error);
-			this.showToast('Indexing failed.', true);
 		}
 		this.indexingDocId.set(null);
 	}
@@ -230,13 +226,9 @@ export class Document implements OnInit {
 
 			if (result?.status === 'indexed') {
 				await this.fetchDocs();
-				this.showToast('Document re-indexed successfully.');
-			} else {
-				this.showToast(`Re-indexing status: ${result?.status || 'unknown'}`, true);
 			}
 		} catch (error) {
 			console.error('Re-indexing failed:', error);
-			this.showToast('Re-indexing failed.', true);
 		}
 		this.indexingDocId.set(null);
 	}
@@ -287,14 +279,15 @@ export class Document implements OnInit {
 			const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
 			if (fileInput) fileInput.value = '';
 
-			this.showToast('Document uploaded successfully.');
+			this.showToast('Document uploaded, indexing in progress.');
 
-			// Call indexing API for uploaded document
-			if (uploadResponse?.id) {
-				await this.indexDoc(uploadResponse.id);
-			}
-
+			// Refresh documents first
 			this.fetchDocs();
+
+			// Call indexing API for uploaded document in background
+			if (uploadResponse?.id) {
+				this.indexDoc(uploadResponse.id);
+			}
 		} catch (error: any) {
 			console.error('Upload failed:', error);
 			const errMsg = error?.error?.error || 'Upload failed.';
