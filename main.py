@@ -9,7 +9,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from pathlib import Path
 from datetime import datetime
 
-from api import chat_session, document, chat, indexing
+from api import global_chat, document, chat, indexing
 from api.ldap_auth import ldap_authenticator
 from api.api_auth import api_authenticator
 
@@ -226,7 +226,7 @@ async def auth_middleware(request: Request, call_next):
 
 # ===== Router setup =====
 app.include_router(indexing.router, prefix="/api/indexing")
-app.include_router(chat_session.router, prefix="/api/chat_session")
+app.include_router(global_chat.router, prefix="/api/chat_session")
 app.include_router(document.router, prefix="/api/document")
 app.include_router(chat.router, prefix="/api/chat")
 

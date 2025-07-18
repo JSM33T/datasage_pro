@@ -1,0 +1,19 @@
+# FastAPI and Core Dependencies
+fastapi
+uvicorn
+python-dotenv
+pymongo
+openai
+faiss-cpu
+numpy
+tiktoken
+
+# LangChain Dependencies for Intelligent RAG
+langchain
+langchain-openai
+langchain-community
+langchain-core
+
+# Additional dependencies
+requests
+Pillow

@@ -11,6 +11,24 @@ import faiss
 import pickle
 import numpy as np
 
+# LangChain imports for intelligent RAG
+from langchain.chains import ConversationalRetrievalChain
+from langchain.memory import ConversationBufferWindowMemory
+from langchain.prompts import PromptTemplate
+from langchain.schema import Document
+from langchain.vectorstores import FAISS
+from langchain.embeddings import OpenAIEmbeddings
+from langchain.llms import OpenAI
+from langchain.chat_models import ChatOpenAI
+from langchain.chains.question_answering import load_qa_chain
+from langchain.chains.query_constructor.base import AttributeInfo
+from langchain.retrievers.self_query.base import SelfQueryRetriever
+from langchain.chains import LLMChain
+from langchain.schema.runnable import RunnablePassthrough
+from langchain.schema.output_parser import StrOutputParser
+from langchain.prompts import ChatPromptTemplate
+from typing import List, Dict, Any
+
 # === Setup ===
 load_dotenv(override=True)  # force reload
 router = APIRouter()
@@ -20,6 +38,21 @@ client = MongoClient(os.getenv("MONGO_URI"))
 db = client[os.getenv("MONGO_DB")] # type: ignore
 sessions = db["chat_sessions"]
 openai_client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+# Initialize LangChain components
+embeddings = OpenAIEmbeddings(openai_api_key=os.getenv("OPENAI_API_KEY"))
+llm = ChatOpenAI(
+    model_name=os.getenv("OPENAI_MODEL", "gpt-3.5-turbo"),
+    temperature=0.1,
+    openai_api_key=os.getenv("OPENAI_API_KEY")
+)
+
+# Memory for conversation context
+conversation_memory = ConversationBufferWindowMemory(
+    k=5,  # Remember last 5 exchanges
+    memory_key="chat_history",
+    return_messages=True
+)
 
 @router.get("/get_session/{session_id}")
 def get_session(session_id: str, request: Request):
@@ -74,15 +107,389 @@ def list_sessions(request: Request):
 
     return enriched_sessions
     
-# === Embedding helper ===
+# === LangChain-based Intelligent Document Processing ===
+
+class IntelligentDocumentProcessor:
+    """Advanced document processor using LangChain for understanding human intentions"""
+    
+    def __init__(self):
+        self.llm = llm
+        self.embeddings = embeddings
+        self.intent_analyzer = self._create_intent_analyzer()
+        self.document_analyzer = self._create_document_analyzer()
+        self.query_enhancer = self._create_query_enhancer()
+        
+    def _create_intent_analyzer(self):
+        """Create a chain to analyze user intent and query type"""
+        intent_prompt = ChatPromptTemplate.from_template("""
+        Analyze the user's query to understand their intent and information need.
+        
+        User Query: {query}
+        Conversation History: {history}
+        
+        Classify the query into one of these categories:
+        1. FACTUAL - Looking for specific facts, data, or information
+        2. PROCEDURAL - Asking how to do something or about processes
+        3. CONCEPTUAL - Understanding concepts, definitions, or explanations
+        4. COMPARATIVE - Comparing different things or options
+        5. TROUBLESHOOTING - Solving problems or issues
+        6. EXPLORATORY - Open-ended exploration of a topic
+        
+        Also identify:
+        - Key entities/topics mentioned
+        - Specific domain or context
+        - Level of detail required (brief, detailed, comprehensive)
+        - Any implicit context from conversation history
+        
+        Provide your analysis in this format:
+        Intent Category: [CATEGORY]
+        Key Topics: [list of main topics]
+        Context Domain: [domain/field]
+        Detail Level: [brief/detailed/comprehensive]
+        Enhanced Query: [reformulated query with better context]
+        Search Keywords: [optimized keywords for document search]
+        """)
+        
+        return LLMChain(llm=self.llm, prompt=intent_prompt)
+    
+    def _create_document_analyzer(self):
+        """Create a chain to analyze document relevance and content matching"""
+        doc_prompt = ChatPromptTemplate.from_template("""
+        Analyze the following document content to determine its relevance to the user's query.
+        
+        User Query: {query}
+        User Intent: {intent_analysis}
+        Document Name: {doc_name}
+        Document Content: {content}
+        
+        Evaluate:
+        1. Relevance Score (0-100): How well does this document answer the query?
+        2. Content Quality: Does the content directly address the user's intent?
+        3. Information Completeness: How complete is the information for this query?
+        4. Key Insights: What are the most relevant parts of this document?
+        
+        Provide analysis in this format:
+        Relevance Score: [0-100]
+        Quality Assessment: [high/medium/low]
+        Completeness: [complete/partial/insufficient]
+        Key Sections: [list of most relevant content sections]
+        Confidence: [how confident you are in this assessment]
+        """)
+        
+        return LLMChain(llm=self.llm, prompt=doc_prompt)
+    
+    def _create_query_enhancer(self):
+        """Create a chain to enhance queries based on conversation context"""
+        enhance_prompt = ChatPromptTemplate.from_template("""
+        Enhance the user's query to better match relevant documents and improve search results.
+        
+        Original Query: {query}
+        Intent Analysis: {intent}
+        Conversation Context: {context}
+        Document History: {doc_history}
+        
+        Create an enhanced query that:
+        1. Includes implicit context from the conversation
+        2. Uses domain-specific terminology when appropriate
+        3. Clarifies ambiguous terms
+        4. Adds relevant synonyms and related concepts
+        5. Maintains the user's original intent
+        
+        Enhanced Query: [provide the improved query]
+        Alternative Phrasings: [2-3 alternative ways to phrase the same query]
+        """)
+        
+        return LLMChain(llm=self.llm, prompt=enhance_prompt)
+
+# Initialize the intelligent processor
+doc_processor = IntelligentDocumentProcessor()
+
+def analyze_user_intent(query: str, conversation_history: List[Dict] = None) -> Dict[str, Any]:
+    """Analyze user intent and enhance query understanding"""
+    try:
+        history_text = ""
+        if conversation_history:
+            recent_messages = conversation_history[-6:]  # Last 3 exchanges
+            history_text = "\n".join([
+                f"User: {msg['content']}" if msg['role'] == 'user' 
+                else f"Assistant: {msg['content']}" 
+                for msg in recent_messages
+            ])
+        
+        result = doc_processor.intent_analyzer.run(
+            query=query,
+            history=history_text
+        )
+        
+        # Parse the result to extract structured information
+        lines = result.strip().split('\n')
+        analysis = {}
+        
+        for line in lines:
+            if ':' in line:
+                key, value = line.split(':', 1)
+                key = key.strip().lower().replace(' ', '_')
+                analysis[key] = value.strip()
+        
+        return analysis
+        
+    except Exception as e:
+        print(f"[DEBUG] Error in intent analysis: {e}")
+        return {
+            "intent_category": "FACTUAL",
+            "key_topics": query,
+            "enhanced_query": query,
+            "search_keywords": query
+        }
+
+def create_intelligent_vectorstore(doc_ids: List[str]) -> FAISS:
+    """Create a LangChain FAISS vectorstore from documents with metadata"""
+    documents = []
+    
+    # Get document metadata
+    doc_collection = db["documents"]
+    doc_metadata = {}
+    for doc in doc_collection.find({"_id": {"$in": doc_ids}}):
+        doc_metadata[doc["_id"]] = {
+            "name": doc.get("name", ""),
+            "description": doc.get("description", ""),
+            "filename": doc.get("filename", ""),
+            "summary": doc.get("generatedSummary", "")
+        }
+    
+    for doc_id in doc_ids:
+        doc_dir = RESOURCE_DIR / doc_id
+        pkl_path = doc_dir / f"{doc_id}.pkl"
+        
+        if not pkl_path.exists():
+            continue
+            
+        try:
+            with open(pkl_path, "rb") as f:
+                meta = pickle.load(f)
+                text_chunks = meta.get("text", [])
+                if isinstance(text_chunks, str):
+                    text_chunks = [text_chunks]
+            
+            doc_meta = doc_metadata.get(doc_id, {})
+            
+            for i, chunk in enumerate(text_chunks):
+                if chunk.strip() and len(chunk.strip()) > 50:  # Filter out very short chunks
+                    doc = Document(
+                        page_content=chunk.strip(),
+                        metadata={
+                            "doc_id": doc_id,
+                            "doc_name": doc_meta.get("name", f"Document_{doc_id}"),
+                            "doc_description": doc_meta.get("description", ""),
+                            "doc_summary": doc_meta.get("summary", ""),
+                            "chunk_index": i,
+                            "filename": doc_meta.get("filename", "")
+                        }
+                    )
+                    documents.append(doc)
+                    
+        except Exception as e:
+            print(f"[DEBUG] Error processing document {doc_id}: {e}")
+            continue
+    
+    if not documents:
+        return None
+        
+    # Create FAISS vectorstore
+    vectorstore = FAISS.from_documents(documents, embeddings)
+    return vectorstore
+
+def intelligent_document_retrieval(
+    query: str, 
+    intent_analysis: Dict[str, Any], 
+    vectorstore: FAISS, 
+    k: int = 5
+) -> List[Document]:
+    """Retrieve documents using intelligent search based on intent analysis"""
+    
+    # Use enhanced query for better retrieval
+    enhanced_query = intent_analysis.get("enhanced_query", query)
+    search_keywords = intent_analysis.get("search_keywords", query)
+    
+    # Multi-strategy retrieval
+    retrieved_docs = []
+    
+    try:
+        # Strategy 1: Semantic similarity search with enhanced query
+        similarity_docs = vectorstore.similarity_search(enhanced_query, k=k)
+        retrieved_docs.extend(similarity_docs)
+        
+        # Strategy 2: Keyword-based search if different from enhanced query
+        if search_keywords != enhanced_query:
+            keyword_docs = vectorstore.similarity_search(search_keywords, k=k//2)
+            retrieved_docs.extend(keyword_docs)
+        
+        # Strategy 3: MMR (Maximum Marginal Relevance) for diversity
+        mmr_docs = vectorstore.max_marginal_relevance_search(
+            enhanced_query, k=k//2, fetch_k=k*2
+        )
+        retrieved_docs.extend(mmr_docs)
+        
+        # Remove duplicates while preserving order
+        seen_content = set()
+        unique_docs = []
+        for doc in retrieved_docs:
+            content_hash = hash(doc.page_content[:200])  # Use first 200 chars as identifier
+            if content_hash not in seen_content:
+                seen_content.add(content_hash)
+                unique_docs.append(doc)
+                
+        return unique_docs[:k*2]  # Return up to k*2 documents for analysis
+        
+    except Exception as e:
+        print(f"[DEBUG] Error in intelligent retrieval: {e}")
+        # Fallback to simple similarity search
+        return vectorstore.similarity_search(query, k=k)
+
+def analyze_document_relevance(
+    query: str, 
+    intent_analysis: Dict[str, Any], 
+    documents: List[Document]
+) -> List[Dict[str, Any]]:
+    """Analyze each document's relevance using LangChain"""
+    
+    analyzed_docs = []
+    
+    for doc in documents:
+        try:
+            # Analyze document relevance
+            relevance_analysis = doc_processor.document_analyzer.run(
+                query=query,
+                intent_analysis=str(intent_analysis),
+                doc_name=doc.metadata.get("doc_name", "Unknown"),
+                content=doc.page_content[:2000]  # First 2000 chars for analysis
+            )
+            
+            # Extract relevance score
+            relevance_score = 50  # Default
+            try:
+                for line in relevance_analysis.split('\n'):
+                    if 'relevance score:' in line.lower():
+                        score_text = line.split(':')[1].strip()
+                        relevance_score = int(''.join(filter(str.isdigit, score_text)))
+                        break
+            except:
+                pass
+            
+            analyzed_docs.append({
+                "document": doc,
+                "relevance_score": relevance_score,
+                "analysis": relevance_analysis,
+                "doc_id": doc.metadata.get("doc_id"),
+                "doc_name": doc.metadata.get("doc_name")
+            })
+            
+        except Exception as e:
+            print(f"[DEBUG] Error analyzing document relevance: {e}")
+            # Fallback scoring
+            analyzed_docs.append({
+                "document": doc,
+                "relevance_score": 30,
+                "analysis": "Basic relevance assessment",
+                "doc_id": doc.metadata.get("doc_id"),
+                "doc_name": doc.metadata.get("doc_name")
+            })
+    
+    # Sort by relevance score
+    analyzed_docs.sort(key=lambda x: x["relevance_score"], reverse=True)
+    return analyzed_docs
+
+def create_intelligent_response(
+    query: str, 
+    intent_analysis: Dict[str, Any], 
+    relevant_documents: List[Dict[str, Any]], 
+    conversation_history: List[Dict]
+) -> str:
+    """Generate intelligent response using LangChain with context awareness"""
+    
+    # Prepare context from top relevant documents
+    context_docs = []
+    doc_sources = []
+    
+    for doc_info in relevant_documents[:5]:  # Top 5 most relevant
+        if doc_info["relevance_score"] > 20:  # Minimum relevance threshold
+            doc = doc_info["document"]
+            context_docs.append(doc.page_content)
+            doc_sources.append(doc_info["doc_name"])
+    
+    if not context_docs:
+        return "I don't have relevant information to answer your query based on the available documents."
+    
+    # Create context-aware response prompt
+    response_prompt = ChatPromptTemplate.from_template("""
+    You are an intelligent document assistant. Answer the user's query based on the provided context.
+    
+    User Query: {query}
+    User Intent: {intent_category}
+    Query Type: {detail_level}
+    
+    Context from Documents:
+    {context}
+    
+    Conversation History:
+    {history}
+    
+    Instructions:
+    1. Provide a direct, helpful answer based on the context
+    2. Match the detail level requested by the user
+    3. If the context doesn't fully answer the query, explain what information is available
+    4. Use clear, professional language
+    5. Reference document sources when relevant
+    6. Consider the conversation history for context
+    
+    Answer:
+    """)
+    
+    # Prepare conversation history
+    history_text = ""
+    if conversation_history:
+        recent_messages = conversation_history[-4:]  # Last 2 exchanges
+        history_text = "\n".join([
+            f"User: {msg['content']}" if msg['role'] == 'user' 
+            else f"Assistant: {msg['content']}" 
+            for msg in recent_messages
+        ])
+    
+    # Generate response
+    try:
+        response_chain = LLMChain(llm=llm, prompt=response_prompt)
+        response = response_chain.run(
+            query=query,
+            intent_category=intent_analysis.get("intent_category", "FACTUAL"),
+            detail_level=intent_analysis.get("detail_level", "detailed"),
+            context="\n\n".join(context_docs),
+            history=history_text
+        )
+        
+        # Add source information
+        if doc_sources:
+            unique_sources = list(set(doc_sources))
+            if len(unique_sources) <= 3:
+                response += f"\n\n*Sources: {', '.join(unique_sources)}*"
+            else:
+                response += f"\n\n*Sources: {', '.join(unique_sources[:3])} and {len(unique_sources)-3} more*"
+        
+        return response.strip()
+        
+    except Exception as e:
+        print(f"[DEBUG] Error generating intelligent response: {e}")
+        return "I encountered an error while processing your query. Please try again."
+    
+# === Helper Functions ===
 def get_embedding(text: str):
+    """Legacy embedding function for backward compatibility"""
     response = openai_client.embeddings.create(
         model="text-embedding-ada-002",
         input=text
     )
     return np.array([response.data[0].embedding], dtype="float32")
-    
-# === Context retrieval from FAISS + .pkl ===
+
+# === Legacy Functions (kept for backward compatibility) ===
 def retrieve_context_from_faiss(doc_ids, query, top_k=3):
     combined_index = None
     all_text_chunks = []
@@ -625,261 +1032,210 @@ def start_chat_all_docs(request: Request):
 
 @router.post("/continue2")
 def continue_chat_all_docs(data: dict = Body(...), request: Request = None):
-    user_id = request.state.user.get('username')  # Get user ID from JWT token
-    from tiktoken import encoding_for_model
-
-    def count_tokens(text, model="gpt-3.5-turbo"):
-        enc = encoding_for_model(model)
-        return len(enc.encode(text))
-
+    """Enhanced chat continuation using LangChain for intelligent document understanding"""
+    user_id = request.state.user.get('username')
+    
     session_id = data.get("session_id")
     query = data.get("query")
     if not session_id or not query:
         return JSONResponse(status_code=400, content={"error": "session_id and query required"})
 
     # Find session by ID and ensure it belongs to the user
-    chat = sessions.find_one({ "_id": session_id, "user_id": user_id })
+    chat = sessions.find_one({"_id": session_id, "user_id": user_id})
     if not chat:
         return JSONResponse(status_code=404, content={"error": "Session not found"})
 
     messages = chat["messages"]
     
-    # Get document context history from session
-    document_context_history = chat.get("document_context_history", {})
+    print(f"\n[DEBUG] === LangChain-Enhanced RAG Processing ===")
+    print(f"[DEBUG] User Query: {query}")
     
-    # Enhance query with intelligent document context
-    enhanced_query = enhance_query_with_context(query, document_context_history, messages)
+    # Step 1: Analyze user intent and enhance query
+    intent_analysis = analyze_user_intent(query, messages)
+    print(f"[DEBUG] Intent Analysis: {intent_analysis}")
     
-    messages.append({ "role": "user", "content": enhanced_query })
-
-    all_doc_ids = [doc["_id"] for doc in db["documents"].find({}, { "_id": 1 })]
+    # Step 2: Get all available documents
+    all_doc_ids = [doc["_id"] for doc in db["documents"].find({}, {"_id": 1})]
     
-    # === Retrieve context with priority ===
-    context_text, doc_score = retrieve_context_with_priority(all_doc_ids, enhanced_query, document_context_history)
-
-    # === Token count trimming for context_text at chunk boundaries ===
-    MAX_CONTEXT_TOKENS = 3000
-    context_chunks = context_text.split("\n\n")
-    trimmed_context = []
-    total_tokens = 0
-    for chunk in context_chunks:
-        chunk_tokens = count_tokens(chunk)
-        if total_tokens + chunk_tokens > MAX_CONTEXT_TOKENS:
-            break
-        trimmed_context.append(chunk)
-        total_tokens += chunk_tokens
-    context_text_final = "\n\n".join(trimmed_context)
-
-    # Log context for debugging
-    newline_sep = '\n\n'
-    print(f"\n[DEBUG] === RAG Processing Summary ===")
-    print(f"[DEBUG] Original query: {query}")
-    print(f"[DEBUG] Enhanced query: {enhanced_query}")
-    print(f"[DEBUG] Total documents in history: {len(document_context_history)}")
-    print(f"[DEBUG] Documents with success history: {sum(1 for h in document_context_history.values() if h.get('success_count', 0) > 0)}")
-    print(f"[DEBUG] Context chunks retrieved: {len(context_text.split(newline_sep)) if context_text else 0}")
-    print(f"[DEBUG] Doc scores: {doc_score}")
-    print(f"[DEBUG] Max score: {max(doc_score.values()) if doc_score else 0:.3f}")
-    print(f"[DEBUG] Context text length: {len(context_text_final)} chars")
-    print(f"[DEBUG] === End Summary ===\n")
-
-    # === Limit message history ===
-    MAX_MESSAGES = 10
-    messages = messages[-MAX_MESSAGES:]
-
-    # Strict anti-hallucination with graceful degradation
-    SIMILARITY_THRESHOLD = 0.75
-    if not context_text_final or all(score < SIMILARITY_THRESHOLD for score in doc_score.values()):
-        reply = attempt_ai_processing_fallback(query, enhanced_query, doc_score, document_context_history)
-    else:
-        reply = process_with_standard_rag(context_text_final, messages, query, enhanced_query, doc_score, document_context_history)
-
-    messages.append({ "role": "assistant", "content": reply })
-
-    # Update document context history for successful documents with enhanced tracking
-    if doc_score:
-        for doc_id, score in doc_score.items():
-            if score > 0.01:  # Track even low-scoring documents for learning
-                if doc_id not in document_context_history:
-                    document_context_history[doc_id] = {
-                        "success_count": 0, 
-                        "total_queries": 0,
-                        "last_score": 0,
-                        "avg_score": 0,
-                        "score_history": [],
-                        "last_used": None
-                    }
-                
-                # Update statistics
-                history = document_context_history[doc_id]
-                history["total_queries"] += 1
-                history["last_score"] = score
-                history["last_used"] = datetime.utcnow().isoformat()
-                
-                # Maintain rolling history (keep last 10 scores)
-                score_history = history.get("score_history", [])
-                score_history.append(score)
-                if len(score_history) > 10:
-                    score_history = score_history[-10:]
-                history["score_history"] = score_history
-                
-                # Update average score
-                history["avg_score"] = sum(score_history) / len(score_history)
-                
-                # Update success count (consider score > 0.05 as success)
-                if score > 0.05:
-                    history["success_count"] += 1
-                
-                # Calculate success rate
-                history["success_rate"] = history["success_count"] / history["total_queries"]
-                
-                # Add recency factor for next use
-                history["recency_factor"] = 1.0  # Reset recency since it was just used
-                
-                # Get document name for logging
-                documents = db["documents"]
-                doc_info = documents.find_one({"_id": doc_id}, {"name": 1})
-                doc_name = doc_info["name"] if doc_info else f"Document_{doc_id}"
-                
-                print(f"[DEBUG] Updated context history for {doc_name}: success_count={history['success_count']}, "
-                      f"total_queries={history['total_queries']}, avg_score={history['avg_score']:.3f}, "
-                      f"success_rate={history['success_rate']:.3f}")
-
-    # Clean up old history entries (keep only last 50 documents with activity)
-    if len(document_context_history) > 50:
-        # Sort by last_used and keep most recent
-        sorted_history = sorted(
-            document_context_history.items(),
-            key=lambda x: x[1].get("last_used", "1970-01-01T00:00:00"),
-            reverse=True
+    # Step 3: Create intelligent vectorstore
+    print(f"[DEBUG] Creating vectorstore from {len(all_doc_ids)} documents...")
+    vectorstore = create_intelligent_vectorstore(all_doc_ids)
+    
+    if not vectorstore:
+        return JSONResponse(
+            status_code=500, 
+            content={"error": "No documents available for processing"}
         )
-        document_context_history = dict(sorted_history[:50])
-        print(f"[DEBUG] Cleaned up document history, keeping {len(document_context_history)} entries")
     
-    # Optimize document context history periodically
-    import random
-    if random.random() < 0.1:  # 10% chance to optimize on each request
-        document_context_history = optimize_document_context_history(document_context_history)
-
-    # Save updated document context history back to session
+    # Step 4: Intelligent document retrieval
+    print(f"[DEBUG] Performing intelligent document retrieval...")
+    retrieved_docs = intelligent_document_retrieval(
+        query, intent_analysis, vectorstore, k=8
+    )
+    
+    print(f"[DEBUG] Retrieved {len(retrieved_docs)} document chunks")
+    
+    # Step 5: Analyze document relevance
+    print(f"[DEBUG] Analyzing document relevance...")
+    analyzed_docs = analyze_document_relevance(query, intent_analysis, retrieved_docs)
+    
+    # Filter for high relevance documents
+    relevant_docs = [doc for doc in analyzed_docs if doc["relevance_score"] > 25]
+    print(f"[DEBUG] Found {len(relevant_docs)} highly relevant documents")
+    
+    # Step 6: Generate intelligent response
+    print(f"[DEBUG] Generating intelligent response...")
+    
+    # Add user message to conversation
+    messages.append({"role": "user", "content": query})
+    
+    # Generate response using LangChain
+    if relevant_docs:
+        reply = create_intelligent_response(
+            query, intent_analysis, relevant_docs, messages
+        )
+    else:
+        reply = "I couldn't find relevant information in the available documents to answer your query. Could you please rephrase your question or provide more specific details?"
+    
+    # Add assistant response to conversation
+    messages.append({"role": "assistant", "content": reply})
+    
+    # Step 7: Update conversation history and document tracking
+    document_context_history = chat.get("document_context_history", {})
+    doc_score = {}
+    
+    # Update document scores based on relevance analysis
+    for doc_info in relevant_docs:
+        doc_id = doc_info["doc_id"]
+        relevance_score = doc_info["relevance_score"] / 100.0  # Normalize to 0-1
+        doc_score[doc_id] = relevance_score
+        
+        # Update context history
+        if doc_id not in document_context_history:
+            document_context_history[doc_id] = {
+                "success_count": 0,
+                "total_queries": 0,
+                "last_score": 0,
+                "avg_score": 0,
+                "score_history": [],
+                "last_used": None
+            }
+        
+        history = document_context_history[doc_id]
+        history["total_queries"] += 1
+        history["last_score"] = relevance_score
+        history["last_used"] = datetime.utcnow().isoformat()
+        
+        # Update score history
+        score_history = history.get("score_history", [])
+        score_history.append(relevance_score)
+        if len(score_history) > 10:
+            score_history = score_history[-10:]
+        history["score_history"] = score_history
+        
+        # Update average score
+        history["avg_score"] = sum(score_history) / len(score_history)
+        
+        # Update success count (relevance > 0.3 considered success)
+        if relevance_score > 0.3:
+            history["success_count"] += 1
+        
+        # Calculate success rate
+        history["success_rate"] = history["success_count"] / history["total_queries"]
+    
+    # Limit message history
+    MAX_MESSAGES = 12
+    messages = messages[-MAX_MESSAGES:]
+    
+    # Save updated session
     sessions.update_one(
-        { "_id": session_id, "user_id": user_id }, 
-        { "$set": { "messages": messages, "document_context_history": document_context_history } }
+        {"_id": session_id, "user_id": user_id},
+        {"$set": {
+            "messages": messages,
+            "document_context_history": document_context_history,
+            "last_intent_analysis": intent_analysis
+        }}
     )
-
-    # === Sort docs by relevance score ===
-    sorted_docs = sorted(doc_score.items(), key=lambda x: x[1], reverse=True)
-    top_doc_ids = [doc_id for doc_id, _ in sorted_docs]
-
-    docs_cursor = db["documents"].find(
-        { "_id": { "$in": top_doc_ids } },
-        { "_id": 1, "name": 1, "filename": 1 }
-    )
-    doc_map = { str(d["_id"]): d for d in docs_cursor }
-
-    matched_docs = [
-        {
+    
+    # Prepare matched documents for response
+    matched_docs = []
+    for doc_info in relevant_docs[:5]:  # Top 5 documents
+        doc_id = doc_info["doc_id"]
+        doc_name = doc_info["doc_name"]
+        
+        # Get document metadata
+        doc_meta = db["documents"].find_one({"_id": doc_id}, {"filename": 1})
+        filename = doc_meta.get("filename", "") if doc_meta else ""
+        
+        matched_docs.append({
             "doc_id": str(doc_id),
-            "doc_name": doc_map.get(str(doc_id), {}).get("name", ""),
-            "link": f"/resources/{doc_id}/{doc_map.get(str(doc_id), {}).get('filename', '')}",
-            "score": round(doc_score[doc_id], 2)
-        }
-        for doc_id in top_doc_ids if str(doc_id) in doc_map
-    ]
-
+            "doc_name": doc_name,
+            "link": f"/resources/{doc_id}/{filename}",
+            "score": round(doc_info["relevance_score"], 1)
+        })
+    
+    print(f"[DEBUG] Response generated successfully")
+    print(f"[DEBUG] Matched {len(matched_docs)} documents")
+    print(f"[DEBUG] === End LangChain Processing ===\n")
+    
     return {
         "reply": reply,
         "messages": messages,
-        "matched_docs": matched_docs
+        "matched_docs": matched_docs,
+        "intent_analysis": intent_analysis
     }
 
-def retrieve_context_from_faiss(doc_ids, query, top_k=5):
-    combined_index = None
-    all_text_chunks = []
-    chunk_doc_map = []
-
-    for doc_id in doc_ids:
-        doc_dir = RESOURCE_DIR / doc_id
-        faiss_path = doc_dir / f"{doc_id}.faiss"
-        pkl_path = doc_dir / f"{doc_id}.pkl"
-
-        if not faiss_path.exists() or not pkl_path.exists():
-            continue
-
-        index = faiss.read_index(str(faiss_path))
-        with open(pkl_path, "rb") as f:
-            meta = pickle.load(f)
-            text_chunks = meta.get("text", [])
-            if isinstance(text_chunks, str):
-                text_chunks = [text_chunks]
-
-        for chunk in text_chunks:
-            all_text_chunks.append(chunk)
-            chunk_doc_map.append(doc_id)
-
-        if combined_index is None:
-            combined_index = index
-        else:
-            combined_index.merge_from(index)
-
-    if combined_index is None or not all_text_chunks:
-        return "No relevant document content found.", {}
-
-    query_vec = get_embedding(query)
-    D, I = combined_index.search(query_vec, top_k)
-
-    matched_chunks = []
-    doc_score = {}
-
-    for i, idx in enumerate(I[0]):
-        if 0 <= idx < len(all_text_chunks):
-            matched_chunks.append(all_text_chunks[idx])
-            doc_id = chunk_doc_map[idx]
-            distance = float(D[0][i])  # ensure native float
-            #score = float(1 / (distance + 1e-6))  # convert to float
-            score = round(1 / (float(distance) + 1e-6), 2)
-            doc_score[doc_id] = doc_score.get(doc_id, 0.0) + score
-
-    return "\n\n".join(matched_chunks), doc_score
-
-def optimize_document_context_history(document_context_history):
-    """Optimize document context history by applying decay and cleanup"""
-    from datetime import datetime, timedelta
+@router.post("/test_langchain")
+def test_langchain_functionality(data: dict = Body(...), request: Request = None):
+    """Test endpoint for LangChain-enhanced RAG functionality"""
+    user_id = request.state.user.get('username')
+    query = data.get("query", "What is this document about?")
     
-    current_time = datetime.utcnow()
-    optimized_history = {}
-    
-    for doc_id, history in document_context_history.items():
-        # Apply time decay to older entries
-        last_used_str = history.get("last_used")
-        if last_used_str:
-            try:
-                if isinstance(last_used_str, str):
-                    last_used = datetime.fromisoformat(last_used_str.replace('Z', '+00:00'))
-                else:
-                    last_used = last_used_str
-                
-                days_since_use = (current_time - last_used).days
-                
-                # Skip entries older than 30 days with no recent success
-                if days_since_use > 30 and history.get("success_count", 0) == 0:
-                    continue
-                
-                # Apply decay factor to old but successful entries
-                if days_since_use > 7:
-                    decay_factor = max(0.1, 1.0 - (days_since_use - 7) * 0.05)
-                    history["success_count"] = max(1, int(history["success_count"] * decay_factor))
-                    history["avg_score"] = history["avg_score"] * decay_factor
-                
-            except Exception as e:
-                print(f"[DEBUG] Error processing date for {doc_id}: {e}")
-                continue
+    try:
+        # Get a few documents for testing
+        all_doc_ids = [doc["_id"] for doc in db["documents"].find({}, {"_id": 1}).limit(5)]
         
-        # Keep only meaningful entries
-        if (history.get("success_count", 0) > 0 or 
-            history.get("total_queries", 0) > 2 or 
-            history.get("avg_score", 0) > 0.05):
-            optimized_history[doc_id] = history
-    
-    #print(f"[DEBUG] Optimized document history: {len(document_context_history)} -> {len(optimized_history)} entries")
-    return optimized_history
+        if not all_doc_ids:
+            return {"error": "No documents found for testing"}
+        
+        # Step 1: Analyze intent
+        intent_analysis = analyze_user_intent(query, [])
+        
+        # Step 2: Create vectorstore
+        vectorstore = create_intelligent_vectorstore(all_doc_ids)
+        
+        if not vectorstore:
+            return {"error": "Could not create vectorstore"}
+        
+        # Step 3: Retrieve documents
+        retrieved_docs = intelligent_document_retrieval(query, intent_analysis, vectorstore, k=3)
+        
+        # Step 4: Analyze relevance
+        analyzed_docs = analyze_document_relevance(query, intent_analysis, retrieved_docs)
+        
+        # Step 5: Generate response
+        relevant_docs = [doc for doc in analyzed_docs if doc["relevance_score"] > 20]
+        
+        if relevant_docs:
+            response = create_intelligent_response(query, intent_analysis, relevant_docs, [])
+        else:
+            response = "No relevant documents found for the test query."
+        
+        return {
+            "query": query,
+            "intent_analysis": intent_analysis,
+            "documents_analyzed": len(analyzed_docs),
+            "relevant_documents": len(relevant_docs),
+            "response": response,
+            "top_docs": [
+                {
+                    "doc_name": doc["doc_name"],
+                    "relevance_score": doc["relevance_score"]
+                } for doc in relevant_docs[:3]
+            ]
+        }
+        
+    except Exception as e:
+        return {"error": f"Test failed: {str(e)}"}
+
+
