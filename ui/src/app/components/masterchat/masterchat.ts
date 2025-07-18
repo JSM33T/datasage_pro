@@ -26,6 +26,9 @@ export class Masterchat implements AfterViewChecked {
 	query = '';
 	private lastMessageCount = 0;
 	loading = false;
+	loadingDots = '';
+	loadingInterval: any = null;
+	showProcessing = false;
 	sessionId: string | null = null;
 	docUrl = environment.docBase;
 	apiUrl = environment.apiBase;
@@ -74,6 +77,19 @@ export class Masterchat implements AfterViewChecked {
 		const text = this.query;
 		this.query = '';
 		this.loading = true;
+		this.loadingDots = '.';
+		this.showProcessing = false;
+		// Animate dots
+		let dotCount = 1;
+		if (this.loadingInterval) clearInterval(this.loadingInterval);
+		this.loadingInterval = setInterval(() => {
+			dotCount = (dotCount % 3) + 1;
+			this.loadingDots = '.'.repeat(dotCount);
+		}, 500);
+		// Show 'processing requests' after 2.5s
+		setTimeout(() => {
+			if (this.loading) this.showProcessing = true;
+		}, 2500);
 
 		try {
 			if (!this.sessionId) {
@@ -101,6 +117,9 @@ export class Masterchat implements AfterViewChecked {
 			console.error('Global chat session error', err);
 		} finally {
 			this.loading = false;
+			if (this.loadingInterval) clearInterval(this.loadingInterval);
+			this.loadingDots = '';
+			this.showProcessing = false;
 		}
 	}
 

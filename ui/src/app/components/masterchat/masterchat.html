@@ -41,7 +41,11 @@
 							</div>
 							<div class="fs-xs text-body-secondary text-end">Just now</div>
 						</div>
-						<div *ngIf="loading" class="text-muted">Assistant is typing...</div>
+						<div *ngIf="loading" class="text-muted">
+							Assistant is typing<span>{{ loadingDots }}</span>
+							<br />
+							<span *ngIf="showProcessing" class="ms-2">Processing requests...</span>
+						</div>
 					</div>
 
 					<form class="d-flex gap-2 mt-3 pt-2 border-top" (ngSubmit)="sendMessage()">
